@@ -3,6 +3,26 @@
 Documentation: [Home](../README.md) · [Docs index](README.md) ·
 [Server policy](server-policy.md) · [Core certification](core-certification.md)
 
+## Start with the simple idea
+
+The wallet does not trust a server because it is reachable, popular, or because
+it reports a high Core version. A future release can contain a new consensus
+bug, and a remote server can misreport what binary it runs.
+
+The protection is a chain of evidence:
+
+```text
+exact release identity
+  -> behavioural certification
+  -> signed policy
+  -> fresh server evidence
+  -> independent chain validation
+```
+
+This is why a hypothetical Core `4.9.0` is unreviewed until its exact
+repository and commit are certified. It is also why a policy entry alone does
+not make a third-party Electrum server trustworthy.
+
 ## What changed
 
 Mainnet server selection now requires this chain of evidence:

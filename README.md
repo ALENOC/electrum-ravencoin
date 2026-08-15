@@ -11,9 +11,24 @@ servers.
 > `2miners/Ravencoin` `v4.8.0` at commit
 > `b60f50e04f1fba425b28804e61be2694faaf3469`.
 
-This is not an official Ravencoin or Electrum release. Wallet files, seed
-generation, private-key handling, transaction signing, hardware-wallet support
-and wallet cryptography remain unchanged by this maintenance fork.
+Wallet files, seed generation, private-key handling, transaction signing,
+hardware-wallet support and wallet cryptography remain unchanged by this
+maintenance fork. This is a community-maintained fork, not a release by the
+Ravencoin Foundation or the original Electrum maintainers.
+
+## Why this maintained wallet exists
+
+The August 2026 Ravencoin consensus incident showed why a wallet should not
+trust a server's reported Core version by itself. The maintained wallet checks
+the exact backend repository and commit against a signed, behaviourally
+certified safe-Core policy, then validates the chain independently. The first
+certified baseline is documented in the [server's incident and certification
+guides](https://github.com/ALENOC/electrumx-ravencoin/tree/master/docs).
+
+If this is your first time using the wallet, you can use an existing wallet
+file and seed with the maintained fork; the security boundary is the server
+selection and chain-evidence checks, not a new wallet format or replacement
+cryptography.
 
 ## Documentation
 
@@ -34,6 +49,10 @@ No maintained ALENOC binary release is being published yet. Run from source
 after reviewing the current release notes, or build a local package using
 [Building](docs/building.md). Do not treat an upstream Electrum binary as an
 ALENOC-certified release.
+
+When a maintained binary is published, verify its checksums and signature using
+the release instructions before running it. Until then, source installation is
+the reproducible path.
 
 ## Quick start from source
 

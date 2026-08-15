@@ -1,12 +1,14 @@
 # Electrum Ravencoin documentation
 
-The homepage is a short user entry point. Use these focused guides for detail.
+The homepage is a user-first entry point. Use these focused guides when you
+want the detailed explanation or operator reference.
 
-## Users
+## New here?
 
-- [Security model](security-model.md): what the wallet trusts.
-- [Server policy](server-policy.md): why a server is accepted or rejected.
-- [Troubleshooting](troubleshooting.md): common connection and policy states.
+- [Security model](security-model.md): a plain-language explanation of the
+  trust path and why version numbers are not enough.
+- [Server policy](server-policy.md): what the wallet asks a server to prove.
+- [Troubleshooting](troubleshooting.md): connection, chain and policy errors.
 
 ## Developers and operators
 
