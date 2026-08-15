@@ -45,8 +45,9 @@ def body(version=1, servers=None, expires_in_hours=24):
 
 
 def sign(private_key, key_id, document_body):
-    payload = json.dumps(document_body, sort_keys=True, separators=(",", ":"),
-                         ensure_ascii=True).encode()
+    payload = (directory.SIGNATURE_DOMAIN + json.dumps(
+        document_body, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode())
     return {
         "directory": document_body,
         "signature": {"algorithm": "ed25519", "keyId": key_id,

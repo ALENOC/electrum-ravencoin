@@ -29,6 +29,7 @@ from .logging import Logger
 
 REQUIRED_SAFETY_PROFILE = "rvn-consensus-2026-08-v1"
 POLICY_SCHEMA_VERSION = 1
+SIGNATURE_DOMAIN = b"ALENOC-RVN-CORE-POLICY-v1\x00"
 POLICY_CACHE_FILENAME = "safe-core-policy.json"
 #: High-water mark of the newest policy this wallet ever accepted.  Kept in its
 #: own file so deleting or corrupting the cached policy cannot reopen the door to
@@ -63,8 +64,9 @@ class PolicyError(ValueError):
 
 
 def _canonical_bytes(body: dict) -> bytes:
-    return json.dumps(body, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=True).encode("utf-8")
+    return SIGNATURE_DOMAIN + json.dumps(
+        body, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode("utf-8")
 
 
 def _identity(entry: dict) -> Tuple[str, str]:

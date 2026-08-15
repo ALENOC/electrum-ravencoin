@@ -50,8 +50,9 @@ def body(version=2, releases=None, expires_in_days=90, profile=None):
 
 
 def sign(private_key, key_id, document_body):
-    payload = json.dumps(document_body, sort_keys=True, separators=(",", ":"),
-                         ensure_ascii=True).encode()
+    payload = (policy.SIGNATURE_DOMAIN + json.dumps(
+        document_body, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode())
     return {
         "policy": document_body,
         "signature": {

@@ -21,6 +21,7 @@ import json
 from typing import Dict, List, Mapping, Optional
 
 DIRECTORY_SCHEMA_VERSION = 1
+SIGNATURE_DOMAIN = b"ALENOC-RVN-ELECTRUM-DIRECTORY-v1\x00"
 
 #: Public keys allowed to sign a server directory.  Deliberately a *different*
 #: key from the Core safety policy: the directory is lower-stakes discovery
@@ -37,8 +38,9 @@ class DirectoryError(ValueError):
 
 
 def _canonical_bytes(body: Mapping) -> bytes:
-    return json.dumps(body, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=True).encode("utf-8")
+    return SIGNATURE_DOMAIN + json.dumps(
+        body, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode("utf-8")
 
 
 def verify_signed_directory(document: Mapping, *,
