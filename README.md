@@ -438,7 +438,17 @@ Honest current state, to be updated as milestones actually complete:
 | Backend safety policy and fail-closed gates | IMPLEMENTED |
 | Deterministic test coverage of the policy | AUTOMATED TESTED |
 | Schema agreement with the maintained server | CONTRACT TESTED against the server's real response |
+| Policy signing trust root | LIVE, dedicated key `a6b89849cec9eab7` pinned in this build |
+| Anti-rollback and revocation | IMPLEMENTED and TESTED, including replay after a deleted cache |
+| Signed server directory consumed as a hint | IMPLEMENTED and TESTED against a real signed snapshot |
+| First real Core certification run | CERTIFICATION_FAILED; review required |
+| First signed production policy | BLOCKED until a certification passes |
 | Positive end-to-end run against a fully indexed live server | REAL LIVE INTEGRATION PENDING |
+
+No signed production policy has been issued yet. The signing key exists and is
+pinned here, but a policy may only certify a release whose certification actually
+passed, and the first real run did not pass. Until then this wallet uses its
+built-in baseline, which is the correct fail-closed state.
 
 The reference server implementation is still completing its full mainnet Core
 and ElectrumX historical index. Until that finishes, a live server correctly
