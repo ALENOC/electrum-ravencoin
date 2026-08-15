@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "policyVersion": 1,
+  "generatedAt": "2026-08-15T00:00:00+00:00",
+  "safetyProfile": "rvn-consensus-2026-08-v1",
+  "note": "Built-in baseline compiled into this wallet build. It is used when no signed remote policy has been accepted, and a remote policy may add or restrict entries but may never rehabilitate anything refused here. Identity is repository plus commit; a version string on its own never matches.",
+  "releases": [
+    {
+      "repository": "2miners/Ravencoin",
+      "tag": "v4.8.0",
+      "version": "4.8.0",
+      "commit": "b60f50e04f1fba425b28804e61be2694faaf3469",
+      "status": "KNOWN_SAFE",
+      "publishedAt": "2026-08-11T08:16:45Z",
+      "artifactSha256": "966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c",
+      "certification": {
+        "profile": "rvn-consensus-2026-08-v1",
+        "result": "PASS",
+        "method": "manual-baseline-review",
+        "automatedCertification": "PENDING_FIRST_PIPELINE_RUN",
+        "evidence": [
+          "release tag v4.8.0 resolves through annotated tag object 9f553fcbcd6929acf24c0dfea456398dc6455dae to commit b60f50e04f1fba425b28804e61be2694faaf3469, checked against the GitHub API on 2026-08-15; the tag itself is not GPG signed",
+          "published archive ravencoin-4.8.0-x86_64-linux-gnu.tar.gz matches the pinned SHA-256 in both the release metadata and the published SHA256SUMS file, and the maintained server image re-verifies it at build time",
+          "the real mainnet headers at heights 4487774 to 4487777 were collected from a synchronized 4.8.0 node, re-hashed under KAWPOW light verification, and match their known block hashes",
+          "forged variants of the boundary header at 4487776 with a mismatched declared nHeight are rejected by the enforcement rule, and the honest headers are accepted",
+          "the incident checkpoint hash at height 4487775 reported by a synchronized 4.8.0 node matches 000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a091fd",
+          "transfer_overflow is a known consensus deployment on that node and reports active since block 4493664, which an unpatched generation cannot do"
+        ],
+        "limitation": "This entry is the bootstrap trust anchor, established by documented human review rather than by an automated pipeline run. The automated certification of this same identity is pending its first run. Every later candidate must pass the automated profile instead."
+      }
+    }
+  ]
+}

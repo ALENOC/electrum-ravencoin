@@ -133,21 +133,37 @@ rejected. The wallet reads the Core version only from the validated
 
 ## Ravencoin Core compatibility policy
 
-The minimum safe backend is **4.8.0 inclusive**, not "newer than 4.8.0".
-Comparison is numeric and semantic, so 4.10.0 is correctly newer than 4.8.0.
+**A newer version number does not mean a safer one.** This wallet does not ask
+"is the backend at least 4.8.0?". It asks "is this exact build one that has been
+certified against the safety profile I require?".
 
-| Backend Ravencoin Core | Result |
-|---|---|
-| 4.6.1 | rejected |
-| 4.6.1.1 | rejected |
-| 4.7.0 | rejected |
-| 4.8.0 | accepted |
-| 4.8.1 | accepted |
-| 4.10.0 | accepted |
-| 5.0.0 | accepted |
+The identity that matters is the **source repository plus the exact commit**. A
+version string is metadata: two repositories can publish the same version number
+from entirely different code, and a release that has not been tested proves
+nothing about itself.
 
-Accepted means "passes the version check". Every other check still has to pass
-too: network, synchronization, safety flags and independent chain validation.
+| Backend Ravencoin Core | Result | Why |
+|---|---|---|
+| 4.6.1, 4.6.1.1, 4.7.0 | rejected | known unsafe, predates the incident fix |
+| 4.8.0 from the certified commit | accepted | certified against the current profile |
+| 4.8.0 from another commit or repository | rejected | different build, not the certified one |
+| a future 4.8.1, 4.9.0, 5.0.0 | rejected until certified | nobody has tested it yet |
+| a certified release later revoked | rejected | revocation is respected immediately |
+
+The certified baseline shipped with this wallet is
+`2miners/Ravencoin` `v4.8.0` at commit `b60f50e04f1fba425b28804e61be2694faaf3469`.
+
+When a new Ravencoin Core release appears, it is discovered automatically from
+the two upstream sources, built at its exact commit, and put through a
+behavioural certification suite. Only if it passes does it enter a signed policy
+update that wallets can accept. Until then this wallet refuses it, and shows
+`CORE_UNREVIEWED_VERSION` rather than pretending the release is fine.
+
+That refusal is the intended behaviour. A wallet that trusted every new release
+on sight would have trusted the release that caused the August 2026 incident.
+
+Accepted here still means only "passed the release-identity check". Network,
+synchronization, safety flags and independent chain validation all still apply.
 
 ## How server validation works
 
@@ -251,6 +267,42 @@ therefore `false` on a server whose backend is still syncing, alongside
 really been made. This wallet requires the verified form, so a still-syncing
 server is not eligible yet. A server must never advertise a check it has not
 performed.
+
+## How a Core release becomes trusted
+
+```
+2miners/Ravencoin ---+
+                     |
+                     +--> release watcher --> build the exact commit
+                     |                              |
+RavenProject/Ravencoin ---+                         v
+                                          behavioural certification
+                                                    |
+                                            pass? --+-- no --> refused, review required
+                                                    |
+                                                   yes
+                                                    v
+                                        signed safe-Core policy update
+                                                    |
+                                                    v
+                                    wallets accept the new release identity
+```
+
+Publishing a GitHub release grants nothing. Both upstream sources are treated
+identically: being the historical home of the project does not make a release
+trusted, and neither does being the source of the current certified build.
+
+The wallet ships with a built-in baseline so it works with no network access to
+any policy service. A signed policy update can **add** newly certified releases
+and can **revoke** anything, including the baseline entry. It can never do the
+reverse: a remote policy cannot rehabilitate a release the built-in baseline
+refuses, and it cannot introduce a new signing key. Policy updates are also
+protected against rollback, so an attacker cannot replay an old signed policy to
+undo a revocation.
+
+If the policy service is unreachable, the wallet keeps using the last policy it
+verified, or the built-in baseline. It never falls back to accepting an
+uncertified release.
 
 ## Server eligibility states
 
