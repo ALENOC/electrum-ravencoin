@@ -1,4 +1,12 @@
+import unittest
+from unittest.mock import AsyncMock, Mock
+
+from aiorpcx.jsonrpc import JSONRPC, RPCError
+
 from electrum.interface import ServerAddr
+from electrum.interface import Interface
+
+from .test_ravencoin_backend import backend_response
 
 from . import ElectrumTestCase
 
@@ -46,3 +54,35 @@ class TestServerAddr(ElectrumTestCase):
                          ServerAddr(host="2400:6180:0:d1::86b:e001", port=50002, protocol="s").to_friendly_name())
         self.assertEqual("[2400:6180:0:d1::86b:e001]:50001:t",
                          ServerAddr(host="2400:6180:0:d1::86b:e001", port=50001, protocol="t").to_friendly_name())
+
+
+class TestOptionalRavencoinBackendCapability(unittest.IsolatedAsyncioTestCase):
+
+    @staticmethod
+    def interface_with_response(response):
+        interface = object.__new__(Interface)
+        interface.session = Mock()
+        interface.session.send_request = AsyncMock(return_value=response)
+        interface.logger = Mock()
+        return interface
+
+    async def test_maintained_server_response_is_available_as_self_report(self):
+        interface = self.interface_with_response(backend_response())
+        evidence = await interface.request_ravencoin_backend_evidence()
+        self.assertEqual("4.8.0", evidence.core_version)
+        self.assertTrue(evidence.server_reports_compatible_backend)
+
+    async def test_method_not_found_preserves_legacy_server_compatibility(self):
+        interface = self.interface_with_response(None)
+        interface.session.send_request.side_effect = RPCError(
+            JSONRPC.METHOD_NOT_FOUND, "method not found"
+        )
+        evidence = await interface.request_ravencoin_backend_evidence()
+        self.assertIsNone(evidence)
+        interface.logger.info.assert_not_called()
+
+    async def test_malformed_response_is_unknown_without_disconnect(self):
+        interface = self.interface_with_response({"server": "untrusted"})
+        evidence = await interface.request_ravencoin_backend_evidence()
+        self.assertIsNone(evidence)
+        interface.logger.info.assert_called_once()

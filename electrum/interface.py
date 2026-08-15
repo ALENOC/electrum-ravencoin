@@ -59,6 +59,10 @@ from . import constants
 from .i18n import _
 from .logging import Logger
 from .transaction import Transaction
+from .ravencoin_backend import (
+    RavencoinBackendEvidence,
+    parse_ravencoin_backend_evidence,
+)
 
 if TYPE_CHECKING:
     from .network import Network
@@ -382,6 +386,9 @@ class Interface(Logger):
         self._requested_chunks = set()  # type: Set[int]
         self.network = network
         self.session = None  # type: Optional[NotificationSession]
+        # Optional self-reported daemon identity from maintained ElectrumX-RVN servers.
+        # This is diagnostic evidence only; verified headers remain authoritative.
+        self.ravencoin_backend = None  # type: Optional[RavencoinBackendEvidence]
         self._ipaddr_bucket = None
         # Set up proxy.
         # - for servers running on localhost, the proxy is not used. If user runs their own server
@@ -694,6 +701,7 @@ class Interface(Logger):
             if ver[1] != version.PROTOCOL_VERSION:
                 raise GracefulDisconnect(f'server violated protocol-version-negotiation. '
                                          f'we asked for {version.PROTOCOL_VERSION!r}, they sent {ver[1]!r}')
+            self.ravencoin_backend = await self.request_ravencoin_backend_evidence()
             if not self.network.check_interface_against_healthy_spread_of_connected_servers(self):
                 raise GracefulDisconnect(f'too many connected servers already '
                                          f'in bucket {self.bucket_based_on_ipaddress()}')
@@ -717,6 +725,22 @@ class Interface(Logger):
                 raise
             finally:
                 self.got_disconnected.set()  # set this ASAP, ideally before any awaits
+
+    async def request_ravencoin_backend_evidence(self) -> Optional[RavencoinBackendEvidence]:
+        """Query the optional maintained-server capability without breaking old servers."""
+        try:
+            response = await self.session.send_request('server.ravencoin_backend')
+        except aiorpcx.jsonrpc.RPCError as exc:
+            if exc.code != JSONRPC.METHOD_NOT_FOUND:
+                self.logger.info('optional server.ravencoin_backend request failed')
+            return None
+        try:
+            return parse_ravencoin_backend_evidence(response)
+        except (TypeError, ValueError):
+            # Never log the untrusted response body.  Malformed self-reporting is not a
+            # reason to skip normal SPV/header verification; it simply provides no evidence.
+            self.logger.info('server returned malformed Ravencoin backend evidence')
+            return None
 
     async def monitor_connection(self):
         while True:
