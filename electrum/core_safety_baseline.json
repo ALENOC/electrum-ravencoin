@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "policyVersion": 1,
+  "policyVersion": 2,
   "generatedAt": "2026-08-15T00:00:00+00:00",
   "safetyProfile": "rvn-consensus-2026-08-v1",
   "note": "Built-in baseline compiled into this wallet build. It is used when no signed remote policy has been accepted, and a remote policy may add or restrict entries but may never rehabilitate anything refused here. Identity is repository plus commit; a version string on its own never matches.",
@@ -15,9 +15,12 @@
       "artifactSha256": "966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c",
       "certification": {
         "profile": "rvn-consensus-2026-08-v1",
+        "profileRevision": 1,
+        "profileSha256": "1342d079f2eef7ae0803a247d2908c4b031ee4a542b0f837210f92ba36ae27b2",
         "result": "PASS",
-        "method": "manual-baseline-review",
-        "automatedCertification": "PENDING_FIRST_PIPELINE_RUN",
+        "method": "automated-release-certification",
+        "automatedCertification": "CERTIFICATION_PASSED",
+        "reportDigest": "7a7e04b7c38a651896a5126a99fd9e8a8858c771c0cce5366b13e993f8205e7f",
         "evidence": [
           "release tag v4.8.0 resolves through annotated tag object 9f553fcbcd6929acf24c0dfea456398dc6455dae to commit b60f50e04f1fba425b28804e61be2694faaf3469, checked against the GitHub API on 2026-08-15; the tag itself is not GPG signed",
           "published archive ravencoin-4.8.0-x86_64-linux-gnu.tar.gz matches the pinned SHA-256 in both the release metadata and the published SHA256SUMS file, and the maintained server image re-verifies it at build time",
@@ -26,7 +29,7 @@
           "the incident checkpoint hash at height 4487775 reported by a synchronized 4.8.0 node matches 000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a091fd",
           "transfer_overflow is a known consensus deployment on that node and reports active since block 4493664, which an unpatched generation cannot do"
         ],
-        "limitation": "This entry is the bootstrap trust anchor, established by documented human review rather than by an automated pipeline run. The automated certification of this same identity is pending its first run. Every later candidate must pass the automated profile instead."
+        "limitation": "Live-node deployment validation remains separate: the certified software identity does not attest to a third-party Electrum server's running binary or completed mainnet index."
       }
     }
   ]

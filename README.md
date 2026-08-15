@@ -441,14 +441,19 @@ Honest current state, to be updated as milestones actually complete:
 | Policy signing trust root | LIVE, dedicated key `a6b89849cec9eab7` pinned in this build |
 | Anti-rollback and revocation | IMPLEMENTED and TESTED, including replay after a deleted cache |
 | Signed server directory consumed as a hint | IMPLEMENTED and TESTED against a real signed snapshot |
-| First real Core certification run | CERTIFICATION_FAILED; review required |
-| First signed production policy | BLOCKED until a certification passes |
+| First real Core certification run | CERTIFICATION_PASSED: 2miners/Ravencoin v4.8.0 at exact commit `b60f50e04f1fba425b28804e61be2694faaf3469` (12/12 mandatory tests) |
+| First signed production policy | policyVersion 2 available; profile revision and report digest pinned |
 | Positive end-to-end run against a fully indexed live server | REAL LIVE INTEGRATION PENDING |
 
-No signed production policy has been issued yet. The signing key exists and is
-pinned here, but a policy may only certify a release whose certification actually
-passed, and the first real run did not pass. Until then this wallet uses its
-built-in baseline, which is the correct fail-closed state.
+The Core release certification is complete, but live deployment validation remains
+pending. The policy authenticates the certified software identity; it does not
+prove which binary a third-party Electrum server is running. The wallet therefore
+continues to require independent chain validation and live backend evidence before
+it reaches `SAFE_CORE_VERIFIED`.
+
+The signed policy is distributed as a static HTTPS artifact from the maintained
+server repository. A transport outage leaves the last verified cache and built-in
+baseline active; it never causes an unknown Core release to be accepted.
 
 The reference server implementation is still completing its full mainnet Core
 and ElectrumX historical index. Until that finishes, a live server correctly
