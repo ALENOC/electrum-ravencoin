@@ -4,8 +4,12 @@ include electrum-ravencoin.desktop
 include *.py
 include run_electrum
 include org.electrum.electrum.metainfo.xml
-recursive-include packages *.py
-recursive-include packages cacert.pem
+# Ship the bundled dependencies whole.  Selecting only *.py silently dropped the
+# data files some dependencies read at import time, for example
+# packages/multiformats_config/multicodec-table.json, which made the source
+# distribution fail to start at all.  The complete set of non-Python files is
+# about 3.6 MB, so correctness is worth far more than the size saving.
+graft packages
 
 include contrib/requirements/requirements*.txt
 include contrib/deterministic-build/requirements*.txt
@@ -22,6 +26,8 @@ exclude electrum/*.dylib
 
 global-exclude __pycache__
 global-exclude *.py[co~]
+# setuptools console-script launcher stubs, meaningless in a source distribution
+global-exclude *.exe
 global-exclude *.py.orig
 global-exclude *.py.rej
 global-exclude .git
