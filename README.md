@@ -1,4 +1,4 @@
-# Electrum Ravencoin — maintained for safe Core 4.8+ servers
+# Electrum Ravencoin: maintained for safe Core 4.8+ servers
 
 This is the maintained ALENOC fork of
 [`Electrum-RVN-SIG/electrum-ravencoin`](https://github.com/Electrum-RVN-SIG/electrum-ravencoin),
@@ -47,10 +47,10 @@ eligible mainnet interface
 
 These identities are never interchangeable:
 
-1. **Electrum client version** — this wallet application.
-2. **ElectrumX server version** — returned by `server.version` and
+1. **Electrum client version**: this wallet application.
+2. **ElectrumX server version**: returned by `server.version` and
    `serverVersion`.
-3. **Ravencoin Core backend version** — returned only by the validated
+3. **Ravencoin Core backend version**: returned only by the validated
    `backend.version` and `backend.versionNumber` fields of
    `server.ravencoin_backend`.
 
