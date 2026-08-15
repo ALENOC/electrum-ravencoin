@@ -346,6 +346,42 @@ identically: implement `server.ravencoin_backend`, run a Core 4.8.0+ backend,
 serve the real chain, and the server qualifies. Operator identity, branding and
 hostname are not trust proofs and are never used as one.
 
+### Where candidate servers come from
+
+Three sources, all treated the same way:
+
+1. the small **built-in seed list** that ships with the wallet;
+2. a **signed server directory** published by the monitoring project, which is a
+   discovery hint about which endpoints currently exist and look healthy;
+3. **peer discovery**, where servers name other servers.
+
+All three produce candidates. None of them produces trust:
+
+```
+seeds + signed directory + peer gossip
+                 |
+                 v
+        candidate endpoints
+                 |
+                 v
+   this wallet verifies each one itself
+   server.version, server.ravencoin_backend,
+   certified-release policy, chain validation
+                 |
+                 v
+          eligible servers
+```
+
+A directory entry labelled SAFE is somebody else's past opinion about a server
+you are about to talk to directly. The wallet re-checks everything anyway, so a
+compromised or stale directory can waste a connection attempt but cannot make an
+unsafe server acceptable. Directory snapshots are signed, versioned and
+expiring, which stops an old one being replayed, and the wallet keeps its
+built-in seeds so it never depends on any single service being online.
+
+If the directory is unreachable, the wallet uses seeds and whatever it already
+knows. It does not lower its standards to find something to connect to.
+
 ### Bundled server list
 
 The bundled list is a discovery hint inherited from upstream, not a safety
