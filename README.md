@@ -1,95 +1,357 @@
-# Electrum Ravencoin: maintained for safe Core 4.8+ servers
+# Electrum Ravencoin: maintained wallet for Ravencoin Core 4.8+ infrastructure
 
 This is the maintained ALENOC fork of
 [`Electrum-RVN-SIG/electrum-ravencoin`](https://github.com/Electrum-RVN-SIG/electrum-ravencoin),
-updated for modern Ravencoin operation after the August 2026 consensus incident.
-It is not an official Ravencoin or Electrum release. Original copyright, MIT
-licensing, history, and upstream attribution are preserved.
+updated for the Ravencoin network as it exists after the August 2026 consensus
+incident. It is not an official Ravencoin or Electrum release. Original
+copyright, MIT licensing, repository history and upstream attribution are
+preserved, and ALENOC does not claim authorship of the original wallet.
 
-## Security status
+## Security notice, in one paragraph
 
-Normal mainnet operation accepts an ElectrumX endpoint only when all of these are
-true:
+On mainnet this wallet only uses an Electrum server after the server proves that
+the Ravencoin Core node behind it is version **4.8.0 or newer**, and after the
+wallet independently validates the chain that server serves. A server that
+cannot prove its backend is refused, even if it is otherwise reachable and
+responsive. If no server can prove it, the wallet stays disconnected rather than
+using an unverifiable one. That is deliberate: it is a safety property, not a
+connectivity bug.
 
-- `server.ravencoin_backend` is present, current, and structurally valid;
-- the backend is Ravencoin Core **4.8.0 or newer** (exactly 4.8.0 is accepted);
-- the backend reports mainnet, matching network evidence, synchronized heights,
-  the 4,487,775 checkpoint, and post-KAWPOW height validation;
-- the version text, numeric Core version, and Core subversion agree; and
-- normal genesis, checkpoint, header-continuity, and chain validation also pass.
+Your keys are unaffected by any of this. Seed generation, key handling, wallet
+encryption, the wallet file format and transaction signing are untouched by this
+maintenance work. See [Security model](#security-model).
 
-Core 4.6.x and 4.7.x, wrong-network servers, unsafe flags, stale/malformed
-responses, timeouts, and `method not found` are rejected. Legacy or unverifiable
-servers are intentionally ineligible; this is a security feature, not a
-connectivity bug. If every safe endpoint disappears, the wallet remains
-degraded/offline instead of falling back to an unsafe server.
+## Why this maintained fork exists
 
-Backend self-report is necessary but not sufficient. A server that lies about
-its backend still has to supply a chain that passes the client's independent
-header checks. An interface does not enter the usable mainnet pool until both
-gates succeed:
+In August 2026 a Ravencoin consensus problem involving post-KAWPOW header height
+validation forced the network onto a patched Ravencoin Core generation. The
+Electrum server ecosystem had to move to Ravencoin Core 4.8.0 or newer, and a
+wallet has no way to tell a patched backend from an unpatched one by looking at
+the Electrum server's own version string.
+
+So this fork asks the server directly, in a way the server has to answer with
+checkable evidence, and it refuses infrastructure that cannot demonstrate the
+modern safety baseline. Everything else about the wallet stays as upstream built
+it.
+
+Primary reference for the patched Core generation: the
+[2miners Ravencoin 4.8.0 release](https://github.com/2miners/Ravencoin/releases/tag/v4.8.0).
+
+## Three different versions, never interchangeable
+
+This trips up almost everyone, so it is worth being explicit. Three independent
+version numbers are involved:
+
+| Version | What it identifies | Where it comes from |
+|---|---|---|
+| Electrum client version | this wallet application | the wallet itself |
+| ElectrumX server version | the Electrum server software | `server.version` |
+| Ravencoin Core backend version | the full node behind that server | `server.ravencoin_backend` |
+
+`server.version` identifies the ElectrumX software, for example
+`ElectrumX-RVN 1.13.0.dev1`. It says nothing at all about the Ravencoin Core
+node behind it, and ElectrumX is not itself "version 4.8.0".
 
 ```
-Electrum TCP/TLS
+Electrum wallet
        |
        v
-server.ravencoin_backend ---- fail ----> reject
+ElectrumX server
        |
-       | Core >= 4.8.0, mainnet, safety flags
-       v
-header / checkpoint / chain ---- fail -> quarantine
+       |-- server.version            -> ElectrumX software identity
+       |
+       |-- server.ravencoin_backend  -> Ravencoin Core backend evidence
        |
        v
-eligible mainnet interface
+   backend Core >= 4.8.0 ?
+       |
+     YES -> continue validating
+      NO -> reject the server
 ```
 
-## Three different versions
+A server reporting `server.version = "4.8.0"` while its backend is Core 4.7.0 is
+rejected. The wallet reads the Core version only from the validated
+`backend.version` and `backend.versionNumber` fields.
 
-These identities are never interchangeable:
+## Ravencoin Core compatibility policy
 
-1. **Electrum client version**: this wallet application.
-2. **ElectrumX server version**: returned by `server.version` and
-   `serverVersion`.
-3. **Ravencoin Core backend version**: returned only by the validated
-   `backend.version` and `backend.versionNumber` fields of
-   `server.ravencoin_backend`.
+The minimum safe backend is **4.8.0 inclusive**, not "newer than 4.8.0".
+Comparison is numeric and semantic, so 4.10.0 is correctly newer than 4.8.0.
 
-For example, `server.version = "4.8.0"` with backend Core 4.7.0 is rejected.
-Operator identity and ALENOC branding are not proof of eligibility: any
-third-party operator can implement the same capability and pass the same chain
-policy without vendor lock-in.
+| Backend Ravencoin Core | Result |
+|---|---|
+| 4.6.1 | rejected |
+| 4.6.1.1 | rejected |
+| 4.7.0 | rejected |
+| 4.8.0 | accepted |
+| 4.8.1 | accepted |
+| 4.10.0 | accepted |
+| 5.0.0 | accepted |
+
+Accepted means "passes the version check". Every other check still has to pass
+too: network, synchronization, safety flags and independent chain validation.
+
+## How server validation works
+
+Evidence is requested immediately after the protocol handshake, and the server
+is dropped as soon as any gate fails.
+
+```
+Electrum server reachable
+        |
+        v
+server.ravencoin_backend present and well formed?
+        |-- NO  -> reject
+        v YES
+backend Core >= 4.8.0?
+        |-- NO  -> reject
+        v YES
+mainnet, synchronized, safety flags all true, evidence fresh?
+        |-- NO  -> reject
+        v YES
+independent chain validation (genesis, checkpoints, header continuity)
+        |-- FAIL -> quarantine, never enters the server pool
+        v PASS
+SAFE_CORE_VERIFIED, server eligible
+```
+
+### Fail-closed table
+
+For normal mainnet use:
+
+| Condition | Result |
+|---|---|
+| `server.ravencoin_backend` missing from the response | rejected |
+| `method not found` for that call | rejected, `BACKEND_METHOD_UNAVAILABLE` |
+| request times out or connection drops | rejected, `UNREACHABLE`, retried on reconnect |
+| malformed or unparsable evidence | rejected, `BACKEND_MALFORMED` |
+| Core version unreadable or not a version | rejected, `CORE_VERSION_UNKNOWN` |
+| Core below 4.8.0 | rejected, `CORE_TOO_OLD` |
+| version text, numeric version and subversion disagree | rejected, `BACKEND_MALFORMED` |
+| backend on the wrong network | rejected, `WRONG_NETWORK` |
+| `coreSafe` false | rejected, `BACKEND_UNSAFE` |
+| `backendSynchronized` false, or blocks and headers disagree | rejected, `BACKEND_UNSAFE` |
+| `initialBlockDownload` true | rejected, `BACKEND_UNSAFE` |
+| `checkpoint4487775` false | rejected, `BACKEND_UNSAFE` |
+| `kawpowHeightValidation` false | rejected, `BACKEND_UNSAFE` |
+| evidence older than 5 minutes, or timestamped in the future | rejected, `BACKEND_UNSAFE` |
+| chain history conflicts with expected Ravencoin history | quarantined, `CHAIN_CONFLICT` |
+
+Availability is intentionally sacrificed here. An unverifiable server is exactly
+the case where a wallet is most likely to be shown a wrong chain, so connecting
+anyway would trade a visible inconvenience for an invisible risk.
+
+Off mainnet, on testnet or regtest, the capability is optional, because those
+networks are for development and the safety baseline is a mainnet property.
+
+## Backend self-report is necessary but not sufficient
+
+A server does not become trusted by claiming "I use Core 4.8.0". The claim only
+gets it past the first gate. The wallet then validates the genesis hash,
+checkpoints and header continuity of the chain the server actually serves, and a
+server whose chain conflicts is quarantined even when its self-report looked
+perfect. Chain validation happens before the server is marked ready, so a
+conflicting server never enters the pool the wallet selects from.
+
+## What `server.ravencoin_backend` returns
+
+The capability exists so a wallet can make a safety decision from checkable
+evidence rather than from a hostname or a brand. The response carries no
+credentials, no wallet data and no file paths. Fields, as implemented by the
+maintained server:
+
+| Field | Meaning |
+|---|---|
+| `server`, `serverVersion` | ElectrumX identity and software version |
+| `backend.name` | must be `Ravencoin Core` |
+| `backend.version`, `backend.versionNumber` | backend Core version, text and numeric, for example `4.8.0` and `4080000` |
+| `backend.subversion` | the daemon's own string, for example `/Ravencoin:4.8.0/` |
+| `backend.network` | `main`, `test` or `regtest` |
+| `backend.blocks`, `backend.headers` | backend chain position |
+| `backend.initialBlockDownload` | whether the backend is still in initial download |
+| `compatibility.minimumSafeCore` | the server's declared floor, expected `4.8.0` |
+| `compatibility.coreSafe` | version, network and checkpoint policy all hold |
+| `compatibility.networkMatches` | the daemon's network matches the server's |
+| `compatibility.backendSynchronized` | the backend is caught up |
+| `compatibility.kawpowHeightValidation` | the server enforces the post-KAWPOW height rule |
+| `compatibility.checkpoint4487775` | the incident checkpoint was **verified**, see below |
+| `observedAt` | when the server collected this evidence |
+
+### Checkpoint semantics
+
+Two different statements are kept apart, and only the second is published:
+
+- **known or configured**: the server knows the checkpoint at height 4,487,775.
+  A backend that has not yet reached that height cannot contradict it, so the
+  server is allowed to keep running and syncing.
+- **verified**: the server actually asked its backend for the block hash at
+  height 4,487,775 and it matched.
+
+`compatibility.checkpoint4487775` reports verification, not configuration. It is
+therefore `false` on a server whose backend is still syncing, alongside
+`backendSynchronized: false`, and becomes `true` only once the comparison has
+really been made. This wallet requires the verified form, so a still-syncing
+server is not eligible yet. A server must never advertise a check it has not
+performed.
+
+## Server eligibility states
+
+These are the state names used internally and surfaced in diagnostics:
+
+| State | Plain meaning |
+|---|---|
+| `SAFE_CORE_VERIFIED` | backend proved Core 4.8.0+, all flags fine, chain validated. Usable. |
+| `CORE_TOO_OLD` | the backend is real but older than 4.8.0. |
+| `CORE_VERSION_UNKNOWN` | no usable Core version could be established. |
+| `BACKEND_METHOD_UNAVAILABLE` | the server does not implement `server.ravencoin_backend`. |
+| `BACKEND_MALFORMED` | the response was invalid, inconsistent or self-contradictory. |
+| `WRONG_NETWORK` | the backend is not proving Ravencoin mainnet. |
+| `BACKEND_UNSAFE` | structurally valid evidence that fails a safety requirement. |
+| `CHAIN_CONFLICT` | the served chain conflicts with expected Ravencoin history. |
+| `UNREACHABLE` | no answer: timeout, disconnect or transport failure. |
+
+## If no safe server is available
+
+```
+no eligible server
+        |
+        v
+wallet stays degraded or disconnected
+        |
+        v
+waits for infrastructure that can prove a safe backend
+```
+
+The wallet does not fall back to a legacy or unverifiable server to appear
+online. Balances and history simply do not refresh until a server qualifies.
+This is the intended behaviour, and the diagnostics explain which requirement
+each candidate failed.
+
+## Any operator can qualify
+
+There is no vendor lock-in and no allowlist. Eligibility comes from protocol
+evidence plus chain validation, so a server run by ALENOC, 2Miners,
+Electrum-RVN SIG, RavenMiner, or any independent community operator is treated
+identically: implement `server.ravencoin_backend`, run a Core 4.8.0+ backend,
+serve the real chain, and the server qualifies. Operator identity, branding and
+hostname are not trust proofs and are never used as one.
+
+### Bundled server list
+
+The bundled list is a discovery hint inherited from upstream, not a safety
+claim. Its entries are historical and unverified under the current policy, and
+each one has to pass the live capability and chain gates on every connection
+like any other candidate. No endpoint is trusted because it appears in that
+file, and no replacement endpoints have been invented here.
+
+Expect the pool of qualifying public servers to be small at first: the
+capability requirement is deliberately strict, so servers that have not upgraded
+are excluded by design. This document intentionally does not list live
+hostnames, since that list changes as operators come and go.
+
+### Reference server implementation
+
+The coordinated maintained server, including a Docker deployment that bundles a
+pinned Ravencoin Core 4.8.0 with ElectrumX, is at
+[`ALENOC/electrumx-ravencoin`](https://github.com/ALENOC/electrumx-ravencoin).
+It implements the compatible `server.ravencoin_backend` capability and enforces
+the Core 4.8.0 floor on its own side. It is a reference implementation, not a
+requirement: you do not have to use that server, or any ALENOC infrastructure,
+to use this wallet.
+
+## Security model
+
+What this maintenance work changed:
+
+- which Electrum servers are eligible on mainnet;
+- backend Ravencoin Core validation and version comparison;
+- server selection and fail-closed network behaviour;
+- diagnostics and rejection messages.
+
+What it did **not** change:
+
+- seed generation and seed derivation;
+- private key handling and storage;
+- wallet encryption;
+- the wallet file format;
+- transaction signing;
+- hardware wallet support and signing;
+- asset signing semantics;
+- NFC and unrelated wallet cryptography.
+
+Existing wallet files keep working, and nothing about how your keys are created,
+stored or used was reworked by this fork. The change is entirely about which
+servers the wallet is willing to believe.
+
+## Validation status
+
+Honest current state, to be updated as milestones actually complete:
+
+| Item | Status |
+|---|---|
+| Backend safety policy and fail-closed gates | IMPLEMENTED |
+| Deterministic test coverage of the policy | AUTOMATED TESTED |
+| Schema agreement with the maintained server | CONTRACT TESTED against the server's real response |
+| Positive end-to-end run against a fully indexed live server | REAL LIVE INTEGRATION PENDING |
+
+The reference server implementation is still completing its full mainnet Core
+and ElectrumX historical index. Until that finishes, a live server correctly
+reports `backendSynchronized: false` and `checkpoint4487775: false`, and this
+wallet correctly refuses it. The positive `SAFE_CORE_VERIFIED` path is therefore
+covered by deterministic and contract tests, and the real live run is not yet
+claimed.
 
 ## Diagnostics
 
-The connected-node tooltip shows the Electrum host, ElectrumX version, backend
-Core version/subversion/network/heights, backend safety state, and chain
-validation state. Rejection messages distinguish an old Core, an unverifiable
-backend, wrong network, malformed evidence, timeout, unsafe flags, and chain
-conflict. Responses are never logged verbatim.
+The connected-node view shows, for the selected server: the Electrum host,
+ElectrumX version, Electrum protocol version, backend Core version and
+subversion, backend network, backend height, the minimum safe Core the server
+declares, the backend safety state, the chain validation state and the resulting
+eligibility state. Rejection messages distinguish an old Core, an unverifiable
+backend, wrong network, malformed evidence, a timeout, unsafe flags and a chain
+conflict. Server responses are never logged verbatim, and no credential is ever
+displayed or stored.
 
-The bundled historical server names remain discovery candidates, not a claim of
-safety. Each connection must pass the live capability and chain gates before it
-enters the selection pool. No new endpoint is fabricated or trusted by hostname.
+## Troubleshooting
 
-## Cryptography scope
+**"Server rejected: Ravencoin Core x.y.z is below the minimum safe version
+4.8.0"**
+The server answered honestly and its backend is too old. Nothing is wrong with
+your wallet. Use a server whose operator has upgraded to Core 4.8.0 or newer.
 
-This maintenance changes network eligibility and diagnostics only. Wallet file
-format, seed generation/derivation, private-key storage, wallet encryption,
-transaction signing, hardware-wallet signing, asset signing, and unrelated NFC
-cryptography are unchanged. No new wallet binary release is implied by this
-branch.
+**Backend Core could not be verified**
+The server either does not implement `server.ravencoin_backend` or returned
+evidence that failed validation. Older servers predate the capability. This is
+the expected outcome for unmaintained infrastructure.
 
-## Run a compatible server
+**"Server rejected: backend reports the wrong Ravencoin network"**
+The server is not proving Ravencoin mainnet. Check that you are not pointing a
+mainnet wallet at a testnet server.
 
-The coordinated maintained server, including the default pinned Core 4.8.0 +
-ElectrumX deployment, is at
-[`ALENOC/electrumx-ravencoin`](https://github.com/ALENOC/electrumx-ravencoin).
+**Blockchain conflict**
+The chain that server serves does not agree with expected Ravencoin history.
+The server is quarantined rather than used. Do not override this.
 
-Neil Booth and the Electrum developers created the original Electrum software;
-the Electrum-RVN-SIG community performed the Ravencoin conversion and asset
-work. ALENOC maintains this fork and does not claim original authorship.
+**No safe server available, the wallet will not connect**
+No candidate could prove a safe backend, so the wallet is staying offline on
+purpose. It will connect as soon as one qualifies.
+
+**`server.version` looks like a fine version but the server is still rejected**
+`server.version` is the ElectrumX software version, not the Ravencoin Core
+version. A server can run recent ElectrumX on top of an old, unpatched Core.
+Only `server.ravencoin_backend` answers the question that matters.
+
+**A server was fine a moment ago and is now ineligible**
+Backend evidence has to be fresh, within five minutes of the wallet's clock. A
+badly skewed system clock on either side can also cause this, so check the time
+on your own machine.
 
 ## Getting started
+
+There is currently **no ALENOC binary release** of this wallet. Run it from
+source, as described below. The upstream build recipes still work, but no
+official maintained-fork installer, AppImage, APK or macOS bundle is published,
+and this document does not imply one exists.
 
 Electrum itself is pure Python, and so are most of the required dependencies,
 but not everything. The following sections describe how to run from source, but here
@@ -159,9 +421,9 @@ so make sure that is on your `PATH` variable.
 _(For OS-specific instructions, see [here for Windows](contrib/build-wine/README_windows.md),
 and [for macOS](contrib/osx/README_macos.md))_
 
-Check out this maintained branch from GitHub:
+A normal clone gives you the maintained code:
 ```
-$ git clone --branch maintenance/server-compat https://github.com/ALENOC/electrum-ravencoin.git
+$ git clone https://github.com/ALENOC/electrum-ravencoin.git
 $ cd electrum-ravencoin
 $ git submodule update --init
 ```
@@ -189,12 +451,20 @@ Run unit tests with `pytest`:
 $ pytest electrum/tests -v
 ```
 
-To run a single file, specify it directly like this:
+The backend safety policy has its own focused suite, which is the fast way to
+check that the Core 4.8+ gates still behave:
 ```
-$ pytest electrum/tests/test_bitcoin.py -v
+$ pytest electrum/tests/test_ravencoin_backend.py electrum/tests/test_interface.py -v
 ```
 
+Some unrelated upstream tests in the wider suite are known to fail on current
+dependencies for reasons predating this fork. Cryptography is never modified to
+make them pass.
+
 ## Creating Binaries
+
+These are the upstream build recipes. They are unchanged, and no maintained-fork
+binary is published from them here.
 
 - [Linux (tarball)](contrib/build-linux/sdist/README.md)
 - [Linux (AppImage)](contrib/build-linux/appimage/README.md)
@@ -215,3 +485,15 @@ Besides [GitHub](https://github.com/spesmilo/electrum),
 most communication about Electrum development happens on IRC, in the
 `#electrum` channel on Libera Chat. The easiest way to participate on IRC is
 with the web client, [web.libera.chat](https://web.libera.chat/#electrum).
+
+## Credits and history
+
+Thomas Voegtlin and the Electrum developers created the original Electrum
+wallet. The Electrum-RVN-SIG community, including kralverde, performed the
+Ravencoin conversion and the asset work this wallet depends on. ALENOC maintains
+this safety fork on top of their work.
+
+The distinction matters: the original upstream project is the wallet, and this
+fork is a maintenance layer that changes which servers it will trust. Upstream
+copyright notices, the MIT licence, acknowledgements and commit history are
+preserved intact.
