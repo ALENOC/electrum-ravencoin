@@ -1,48 +1,93 @@
-# Electrum Ravencoin — community-maintained compatibility fork
+# Electrum Ravencoin — maintained for safe Core 4.8+ servers
 
-This repository is a community-maintained fork of
-[`Electrum-RVN-SIG/electrum-ravencoin`](https://github.com/Electrum-RVN-SIG/electrum-ravencoin).
-It is not an official Ravencoin or Electrum release. Original copyright, MIT licensing,
-and upstream attribution are preserved.
+This is the maintained ALENOC fork of
+[`Electrum-RVN-SIG/electrum-ravencoin`](https://github.com/Electrum-RVN-SIG/electrum-ravencoin),
+updated for modern Ravencoin operation after the August 2026 consensus incident.
+It is not an official Ravencoin or Electrum release. Original copyright, MIT
+licensing, history, and upstream attribution are preserved.
 
-The current maintenance branch focuses narrowly on compatibility with maintained
-ElectrumX-RVN servers and their optional `server.ravencoin_backend` diagnostic method.
-That response keeps the server software version separate from its Ravencoin Core backend
-version. It is self-reported evidence only: normal header and SPV verification remains
-mandatory, and legacy community servers that return `method not found` continue to work.
+## Security status
 
-No wallet-format, seed, private-key, hardware-wallet, or transaction-signing behavior is
-changed by this compatibility work. Source and tests are the immediate deliverable; no new
-wallet binary release is implied by this branch.
+Normal mainnet operation accepts an ElectrumX endpoint only when all of these are
+true:
 
-_(If you've come here looking to simply run Electrum Ravencoin, you may download a prebuilt binary for
-[windows](https://github.com/Electrum-RVN-SIG/electrum-ravencoin/releases/download/v1.2.1/electrum-ravencoin-v1.2.1-setup.exe),
-[linux](https://github.com/Electrum-RVN-SIG/electrum-ravencoin/releases/download/v1.2.1/electrum-ravencoin-v1.2.1-x86_64.AppImage), and
-[mac](https://github.com/Electrum-RVN-SIG/electrum-ravencoin/releases/download/v1.2.0/electrum-ravencoin-v1.2.0.dmg)
-[or see other options](https://github.com/Electrum-RVN-SIG/electrum-ravencoin/releases/latest).)_
+- `server.ravencoin_backend` is present, current, and structurally valid;
+- the backend is Ravencoin Core **4.8.0 or newer** (exactly 4.8.0 is accepted);
+- the backend reports mainnet, matching network evidence, synchronized heights,
+  the 4,487,775 checkpoint, and post-KAWPOW height validation;
+- the version text, numeric Core version, and Core subversion agree; and
+- normal genesis, checkpoint, header-continuity, and chain validation also pass.
 
-Migrating from versions earlier than v1.0.0? Read the release notes for [that version](https://github.com/Electrum-RVN-SIG/electrum-ravencoin/releases/tag/v1.0.1).
+Core 4.6.x and 4.7.x, wrong-network servers, unsafe flags, stale/malformed
+responses, timeouts, and `method not found` are rejected. Legacy or unverifiable
+servers are intentionally ineligible; this is a security feature, not a
+connectivity bug. If every safe endpoint disappears, the wallet remains
+degraded/offline instead of falling back to an unsafe server.
 
-# Electrum Ravencoin - Lightweight Ravencoin client
+Backend self-report is necessary but not sufficient. A server that lies about
+its backend still has to supply a chain that passes the client's independent
+header checks. An interface does not enter the usable mainnet pool until both
+gates succeed:
 
 ```
-Licence: MIT Licence
-Author: Thomas Voegtlin
-Language: Python (>= 3.8)
-Homepage: https://electrum.org/
+Electrum TCP/TLS
+       |
+       v
+server.ravencoin_backend ---- fail ----> reject
+       |
+       | Core >= 4.8.0, mainnet, safety flags
+       v
+header / checkpoint / chain ---- fail -> quarantine
+       |
+       v
+eligible mainnet interface
 ```
 
-[![Build Status](https://api.cirrus-ci.com/github/spesmilo/electrum.svg?branch=master)](https://cirrus-ci.com/github/spesmilo/electrum)
-[![Test coverage statistics](https://coveralls.io/repos/github/spesmilo/electrum/badge.svg?branch=master)](https://coveralls.io/github/spesmilo/electrum?branch=master)
-[![Help translate Electrum online](https://d322cqt584bo4o.cloudfront.net/electrum/localized.svg)](https://crowdin.com/project/electrum)
+## Three different versions
 
-## Run your own server!
+These identities are never interchangeable:
 
-https://github.com/Electrum-RVN-SIG/electrumx-ravencoin
+1. **Electrum client version** — this wallet application.
+2. **ElectrumX server version** — returned by `server.version` and
+   `serverVersion`.
+3. **Ravencoin Core backend version** — returned only by the validated
+   `backend.version` and `backend.versionNumber` fields of
+   `server.ravencoin_backend`.
 
-## Need help?
+For example, `server.version = "4.8.0"` with backend Core 4.7.0 is rejected.
+Operator identity and ALENOC branding are not proof of eligibility: any
+third-party operator can implement the same capability and pass the same chain
+policy without vendor lock-in.
 
-Find @kralverde on [discord](https://discord.com/invite/jn6uhur).
+## Diagnostics
+
+The connected-node tooltip shows the Electrum host, ElectrumX version, backend
+Core version/subversion/network/heights, backend safety state, and chain
+validation state. Rejection messages distinguish an old Core, an unverifiable
+backend, wrong network, malformed evidence, timeout, unsafe flags, and chain
+conflict. Responses are never logged verbatim.
+
+The bundled historical server names remain discovery candidates, not a claim of
+safety. Each connection must pass the live capability and chain gates before it
+enters the selection pool. No new endpoint is fabricated or trusted by hostname.
+
+## Cryptography scope
+
+This maintenance changes network eligibility and diagnostics only. Wallet file
+format, seed generation/derivation, private-key storage, wallet encryption,
+transaction signing, hardware-wallet signing, asset signing, and unrelated NFC
+cryptography are unchanged. No new wallet binary release is implied by this
+branch.
+
+## Run a compatible server
+
+The coordinated maintained server, including the default pinned Core 4.8.0 +
+ElectrumX deployment, is at
+[`ALENOC/electrumx-ravencoin`](https://github.com/ALENOC/electrumx-ravencoin).
+
+Neil Booth and the Electrum developers created the original Electrum software;
+the Electrum-RVN-SIG community performed the Ravencoin conversion and asset
+work. ALENOC maintains this fork and does not claim original authorship.
 
 ## Getting started
 
@@ -89,7 +134,7 @@ If you would like hardware wallet support,
 
 ### Running from tar.gz
 
-If you downloaded the official package (tar.gz), you can run
+If you downloaded a reviewed source package (tar.gz), you can run
 Electrum from its root directory without installing it on your
 system; all the pure python dependencies are included in the 'packages'
 directory. To run Electrum from its root directory, just do:
@@ -114,10 +159,10 @@ so make sure that is on your `PATH` variable.
 _(For OS-specific instructions, see [here for Windows](contrib/build-wine/README_windows.md),
 and [for macOS](contrib/osx/README_macos.md))_
 
-Check out the code from GitHub:
+Check out this maintained branch from GitHub:
 ```
-$ git clone https://github.com/spesmilo/electrum.git
-$ cd electrum
+$ git clone --branch maintenance/server-compat https://github.com/ALENOC/electrum-ravencoin.git
+$ cd electrum-ravencoin
 $ git submodule update --init
 ```
 
