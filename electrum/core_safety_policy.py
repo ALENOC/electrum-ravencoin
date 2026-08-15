@@ -18,9 +18,11 @@ updated.
 
 import base64
 import datetime
+import hashlib
 import json
 import os
 import threading
+import time
 from typing import Dict, Optional, Tuple
 
 from .logging import Logger
@@ -28,16 +30,30 @@ from .logging import Logger
 REQUIRED_SAFETY_PROFILE = "rvn-consensus-2026-08-v1"
 POLICY_SCHEMA_VERSION = 1
 POLICY_CACHE_FILENAME = "safe-core-policy.json"
+#: High-water mark of the newest policy this wallet ever accepted.  Kept in its
+#: own file so deleting or corrupting the cached policy cannot reopen the door to
+#: an older one: a rollback attack that only has to delete a file is not a
+#: defence at all.
+POLICY_STATE_FILENAME = "safe-core-policy.state.json"
 BASELINE_FILENAME = "core_safety_baseline.json"
 
 #: Public keys allowed to sign a remote policy, as key id to raw Ed25519 bytes.
 #:
-#: Empty on purpose: no production policy-signing key has been published yet, so
-#: this build accepts no remote policy at all and relies on the built-in
-#: baseline.  Adding a key here is a wallet update, which is exactly the trust
-#: transition it should be.  Two entries may coexist so a key can be rotated
-#: without breaking older builds.
-TRUSTED_POLICY_KEYS: Dict[str, bytes] = {}
+#: This map is the trust root, and it changes only when the wallet itself is
+#: updated.  A policy can never add a key here: a document cannot authorise its
+#: own signer.  Two entries may coexist so a key can be rotated without breaking
+#: builds that only know the old one, which is how a rotation is meant to run:
+#: publish a wallet trusting both, wait for adoption, then sign with the new key
+#: and later drop the old one in a further wallet update.
+#:
+#: Key ids are the first 16 hex characters of the SHA-256 of the raw public key.
+TRUSTED_POLICY_KEYS: Dict[str, bytes] = {
+    # ALENOC Ravencoin Core safety policy, 2026-08.  Dedicated to this purpose
+    # alone: it signs nothing else, and it is not any wallet, TLS, SSH or
+    # release key.
+    "a6b89849cec9eab7": bytes.fromhex(
+        "9fc91edbe763513490248a23ae97575a6b963101b644e01493a3860b99e35648"),
+}
 
 _VALID_STATUSES = ("KNOWN_SAFE", "KNOWN_UNSAFE", "REVOKED")
 
@@ -216,8 +232,13 @@ class PolicyStore(Logger):
         self._lock = threading.RLock()
         self._baseline = load_baseline()
         self._remote: Optional[dict] = None
+        self._high_water = int(self._baseline["policyVersion"])
         if cache_dir:
+            self._high_water = max(self._high_water, self._load_high_water())
             self._remote = self._load_cache()
+            if self._remote is not None:
+                self._high_water = max(self._high_water,
+                                       int(self._remote["policyVersion"]))
 
     # ------------------------------------------------------------------ cache
     @property
@@ -225,6 +246,48 @@ class PolicyStore(Logger):
         if not self.cache_dir:
             return None
         return os.path.join(self.cache_dir, POLICY_CACHE_FILENAME)
+
+    @property
+    def _state_path(self) -> Optional[str]:
+        if not self.cache_dir:
+            return None
+        return os.path.join(self.cache_dir, POLICY_STATE_FILENAME)
+
+    def _load_high_water(self) -> int:
+        """Read the newest version ever accepted, surviving a lost cache."""
+        path = self._state_path
+        if not path or not os.path.exists(path):
+            return 0
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                state = json.load(handle)
+            version = state.get("policyVersion")
+            if isinstance(version, int) and not isinstance(version, bool) \
+                    and version > 0:
+                return version
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            self.logger.info(f"ignoring unreadable policy state: {exc}")
+        return 0
+
+    def _write_high_water(self, body: dict, signature: dict) -> None:
+        path = self._state_path
+        if not path:
+            return
+        payload = {
+            "policyVersion": int(body["policyVersion"]),
+            "acceptedAt": int(time.time()),
+            "keyId": signature.get("keyId"),
+            "algorithm": signature.get("algorithm"),
+            "policyDigest": hashlib.sha256(_canonical_bytes(body)).hexdigest(),
+            "safetyProfile": body.get("safetyProfile"),
+        }
+        os.makedirs(self.cache_dir, exist_ok=True)
+        temporary = path + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
 
     def _load_cache(self) -> Optional[dict]:
         path = self._cache_path
@@ -253,10 +316,16 @@ class PolicyStore(Logger):
     # ----------------------------------------------------------------- public
     @property
     def policy_version(self) -> int:
+        """The floor for accepting a new policy.
+
+        This is the high-water mark, not simply the version currently loaded: if
+        the cache is missing or was tampered with, the floor still stands.
+        """
         with self._lock:
+            current = int(self._baseline["policyVersion"])
             if self._remote is not None:
-                return int(self._remote["policyVersion"])
-            return int(self._baseline["policyVersion"])
+                current = max(current, int(self._remote["policyVersion"]))
+            return max(current, self._high_water)
 
     def effective(self) -> dict:
         with self._lock:
@@ -272,8 +341,10 @@ class PolicyStore(Logger):
                     f"policy targets profile {body['safetyProfile']!r} but this "
                     f"wallet requires {REQUIRED_SAFETY_PROFILE!r}")
             self._remote = body
+            self._high_water = max(self._high_water, int(body["policyVersion"]))
             try:
                 self._write_cache(document)
+                self._write_high_water(body, document.get("signature") or {})
             except OSError as exc:
                 self.logger.info(f"could not cache the safe-Core policy: {exc}")
             return body

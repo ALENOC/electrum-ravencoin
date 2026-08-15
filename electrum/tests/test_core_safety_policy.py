@@ -96,11 +96,12 @@ class TestPolicySignature(ElectrumTestCase):
             sign(private_key, key_id, body()), trusted_keys=trusted)
         self.assertEqual(2, verified["policyVersion"])
 
-    def test_build_without_trusted_keys_accepts_no_remote_policy(self):
+    def test_an_empty_trust_store_accepts_nothing(self):
+        """A build with no trust root refuses every remote policy, by design."""
         private_key, _trusted, key_id = keypair()
-        self.assertEqual({}, policy.TRUSTED_POLICY_KEYS)
         with self.assertRaises(policy.PolicyError):
-            policy.verify_signed_policy(sign(private_key, key_id, body()))
+            policy.verify_signed_policy(sign(private_key, key_id, body()),
+                                        trusted_keys={})
 
     def test_tampered_policy_is_refused(self):
         private_key, trusted, key_id = keypair()
@@ -245,6 +246,150 @@ class TestPolicyStore(ElectrumTestCase):
                 with self.assertRaises(policy.PolicyError):
                     store.accept_remote(sign(private_key, key_id,
                                              body(profile="rvn-consensus-2030-01-v4")))
+        finally:
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS.update(original)
+
+
+class TestProductionTrustStore(ElectrumTestCase):
+
+    def test_a_production_key_is_pinned(self):
+        assert policy.TRUSTED_POLICY_KEYS, "wallet must ship a policy trust root"
+        for key_id, material in policy.TRUSTED_POLICY_KEYS.items():
+            import hashlib
+            self.assertEqual(32, len(material))
+            self.assertEqual(key_id, hashlib.sha256(material).hexdigest()[:16])
+
+    def test_test_keys_are_not_production_keys(self):
+        _private, trusted, _key_id = keypair()
+        self.assertFalse(set(trusted) & set(policy.TRUSTED_POLICY_KEYS))
+
+    def test_a_policy_signed_by_an_untrusted_key_is_refused_by_default(self):
+        private_key, _trusted, key_id = keypair()
+        with self.assertRaises(policy.PolicyError):
+            policy.verify_signed_policy(sign(private_key, key_id, body()))
+
+
+class TestRollbackHighWaterMark(ElectrumTestCase):
+    """Deleting the cache must not reopen an accepted rollback."""
+
+    def _store_with(self, cache_dir, private_key, key_id, version, releases=None):
+        original = dict(policy.TRUSTED_POLICY_KEYS)
+        policy.TRUSTED_POLICY_KEYS.clear()
+        import hashlib
+        policy.TRUSTED_POLICY_KEYS[key_id] = private_key.public_key().public_bytes_raw()
+        try:
+            store = policy.PolicyStore(cache_dir)
+            store.accept_remote(sign(private_key, key_id,
+                                     body(version=version, releases=releases)))
+            return store
+        finally:
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS.update(original)
+
+    def test_high_water_survives_a_deleted_cache(self):
+        private_key, trusted, key_id = keypair()
+        with tempfile.TemporaryDirectory() as cache_dir:
+            self._store_with(cache_dir, private_key, key_id, 9)
+            os.remove(os.path.join(cache_dir, policy.POLICY_CACHE_FILENAME))
+            original = dict(policy.TRUSTED_POLICY_KEYS)
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS[key_id] = trusted[next(iter(trusted))] \
+                if key_id in trusted else private_key.public_key().public_bytes_raw()
+            try:
+                reopened = policy.PolicyStore(cache_dir)
+                self.assertGreaterEqual(reopened.policy_version, 9)
+                with self.assertRaises(policy.PolicyError):
+                    reopened.accept_remote(sign(private_key, key_id, body(version=8)))
+            finally:
+                policy.TRUSTED_POLICY_KEYS.clear()
+                policy.TRUSTED_POLICY_KEYS.update(original)
+
+    def test_revocation_cannot_be_undone_by_replaying_the_previous_policy(self):
+        private_key, _trusted, key_id = keypair()
+        revoked = dict(safe_entry())
+        revoked.update({"status": "REVOKED", "revocationReason": "consensus bug"})
+        revoked.pop("certification")
+        with tempfile.TemporaryDirectory() as cache_dir:
+            store = self._store_with(cache_dir, private_key, key_id, 12,
+                                     releases=[revoked])
+            entry = policy.lookup(store.effective(), "2miners/Ravencoin",
+                                  CERTIFIED_COMMIT)
+            self.assertEqual("REVOKED", entry["status"])
+            original = dict(policy.TRUSTED_POLICY_KEYS)
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS[key_id] = private_key.public_key().public_bytes_raw()
+            try:
+                # The realistic attacker is on the network, not on the disk: it
+                # can withhold or replay a policy but cannot delete local files.
+                # Removing only the cached policy must not reopen the rollback.
+                os.remove(os.path.join(cache_dir, policy.POLICY_CACHE_FILENAME))
+                reopened = policy.PolicyStore(cache_dir)
+                self.assertGreaterEqual(reopened.policy_version, 12)
+                with self.assertRaises(policy.PolicyError):
+                    reopened.accept_remote(sign(private_key, key_id,
+                                                body(version=11)))
+            finally:
+                policy.TRUSTED_POLICY_KEYS.clear()
+                policy.TRUSTED_POLICY_KEYS.update(original)
+
+    def test_state_file_records_metadata_without_secrets(self):
+        private_key, _trusted, key_id = keypair()
+        with tempfile.TemporaryDirectory() as cache_dir:
+            self._store_with(cache_dir, private_key, key_id, 4)
+            with open(os.path.join(cache_dir, policy.POLICY_STATE_FILENAME)) as handle:
+                state = json.load(handle)
+            self.assertEqual(4, state["policyVersion"])
+            self.assertEqual(key_id, state["keyId"])
+            self.assertIn("policyDigest", state)
+            raw = json.dumps(state)
+            self.assertNotIn(private_key.private_bytes_raw().hex(), raw)
+
+    def test_corrupt_state_file_does_not_lower_the_floor_below_the_cache(self):
+        private_key, _trusted, key_id = keypair()
+        with tempfile.TemporaryDirectory() as cache_dir:
+            self._store_with(cache_dir, private_key, key_id, 7)
+            with open(os.path.join(cache_dir, policy.POLICY_STATE_FILENAME), "w") as f:
+                f.write("{corrupt")
+            original = dict(policy.TRUSTED_POLICY_KEYS)
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS[key_id] = private_key.public_key().public_bytes_raw()
+            try:
+                reopened = policy.PolicyStore(cache_dir)
+                self.assertEqual(7, reopened.policy_version)
+            finally:
+                policy.TRUSTED_POLICY_KEYS.clear()
+                policy.TRUSTED_POLICY_KEYS.update(original)
+
+
+class TestRollbackLimits(ElectrumTestCase):
+    """The honest boundary of local anti-rollback state."""
+
+    def test_wiping_all_local_state_returns_to_the_shipped_baseline(self):
+        """An attacker with local file access resets the floor to the baseline.
+
+        This is a property of any local persistence, not a hole that can be
+        closed by writing another file next to the first one. What matters is
+        where it lands: back at the version compiled into the wallet, which
+        still refuses everything the shipped baseline refuses. A revocation that
+        must survive this is folded into the baseline of the next wallet release.
+        """
+        private_key, _trusted, key_id = keypair()
+        original = dict(policy.TRUSTED_POLICY_KEYS)
+        policy.TRUSTED_POLICY_KEYS.clear()
+        policy.TRUSTED_POLICY_KEYS[key_id] = private_key.public_key().public_bytes_raw()
+        try:
+            with tempfile.TemporaryDirectory() as cache_dir:
+                store = policy.PolicyStore(cache_dir)
+                store.accept_remote(sign(private_key, key_id, body(version=20)))
+                for name in os.listdir(cache_dir):
+                    os.remove(os.path.join(cache_dir, name))
+                reopened = policy.PolicyStore(cache_dir)
+                baseline_version = policy.load_baseline()["policyVersion"]
+                self.assertEqual(baseline_version, reopened.policy_version)
+                # And the baseline still governs what may be trusted at all.
+                effective = reopened.effective()
+                self.assertEqual(1, len(effective["releases"]))
         finally:
             policy.TRUSTED_POLICY_KEYS.clear()
             policy.TRUSTED_POLICY_KEYS.update(original)
