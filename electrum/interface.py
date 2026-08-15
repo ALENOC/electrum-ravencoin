@@ -60,7 +60,11 @@ from .i18n import _
 from .logging import Logger
 from .transaction import Transaction
 from .ravencoin_backend import (
+    BackendEligibilityState,
+    BackendEvidenceError,
     RavencoinBackendEvidence,
+    backend_rejection_message,
+    classify_backend_evidence,
     parse_ravencoin_backend_evidence,
 )
 
@@ -180,7 +184,13 @@ class NotificationSession(RPCSession):
             self.maybe_log(f"--> {repr(e)} (id: {msg_id})")
             raise
         else:
-            self.maybe_log(f"--> {response} (id: {msg_id})")
+            method = args[0] if args else None
+            if method == 'server.ravencoin_backend':
+                # The response is untrusted.  Do not echo it to debug logs: a
+                # malicious endpoint could add credential-shaped or private data.
+                self.maybe_log(f"--> <backend evidence redacted> (id: {msg_id})")
+            else:
+                self.maybe_log(f"--> {response} (id: {msg_id})")
             return response
 
     def set_default_timeout(self, timeout):
@@ -386,9 +396,13 @@ class Interface(Logger):
         self._requested_chunks = set()  # type: Set[int]
         self.network = network
         self.session = None  # type: Optional[NotificationSession]
-        # Optional self-reported daemon identity from maintained ElectrumX-RVN servers.
-        # This is diagnostic evidence only; verified headers remain authoritative.
+        self.server_version = None
         self.ravencoin_backend = None  # type: Optional[RavencoinBackendEvidence]
+        self.ravencoin_backend_state = BackendEligibilityState.CORE_VERSION_UNKNOWN
+        self.ravencoin_backend_error = _(
+            "Backend Ravencoin Core version has not been verified."
+        )
+        self.chain_validation_state = "PENDING"
         self._ipaddr_bucket = None
         # Set up proxy.
         # - for servers running on localhost, the proxy is not used. If user runs their own server
@@ -701,7 +715,10 @@ class Interface(Logger):
             if ver[1] != version.PROTOCOL_VERSION:
                 raise GracefulDisconnect(f'server violated protocol-version-negotiation. '
                                          f'we asked for {version.PROTOCOL_VERSION!r}, they sent {ver[1]!r}')
-            self.ravencoin_backend = await self.request_ravencoin_backend_evidence()
+            self.server_version = ver[0]
+            self.ravencoin_backend = await self.request_ravencoin_backend_evidence(
+                required=constants.net.NET_NAME == "mainnet"
+            )
             if not self.network.check_interface_against_healthy_spread_of_connected_servers(self):
                 raise GracefulDisconnect(f'too many connected servers already '
                                          f'in bucket {self.bucket_based_on_ipaddress()}')
@@ -726,21 +743,66 @@ class Interface(Logger):
             finally:
                 self.got_disconnected.set()  # set this ASAP, ideally before any awaits
 
-    async def request_ravencoin_backend_evidence(self) -> Optional[RavencoinBackendEvidence]:
-        """Query the optional maintained-server capability without breaking old servers."""
+    async def request_ravencoin_backend_evidence(
+            self, *, required: bool = None) -> Optional[RavencoinBackendEvidence]:
+        """Require safe backend evidence on mainnet; remain optional elsewhere."""
+        if required is None:
+            required = constants.net.NET_NAME == "mainnet"
         try:
             response = await self.session.send_request('server.ravencoin_backend')
+        except RequestTimedOut as exc:
+            self.ravencoin_backend_state = BackendEligibilityState.UNREACHABLE
+            self.ravencoin_backend_error = _(
+                "Server rejected: backend Ravencoin Core verification timed out."
+            )
+            if required:
+                raise GracefulDisconnect(self.ravencoin_backend_error) from exc
+            return None
         except aiorpcx.jsonrpc.RPCError as exc:
-            if exc.code != JSONRPC.METHOD_NOT_FOUND:
-                self.logger.info('optional server.ravencoin_backend request failed')
+            if exc.code == JSONRPC.METHOD_NOT_FOUND:
+                self.ravencoin_backend_state = (
+                    BackendEligibilityState.BACKEND_METHOD_UNAVAILABLE
+                )
+                self.ravencoin_backend_error = _(
+                    "Server rejected: backend Ravencoin Core version could not be verified."
+                )
+            else:
+                self.ravencoin_backend_state = BackendEligibilityState.UNREACHABLE
+                self.ravencoin_backend_error = _(
+                    "Server rejected: backend Ravencoin Core verification failed."
+                )
+            if required:
+                raise GracefulDisconnect(self.ravencoin_backend_error) from exc
             return None
         try:
-            return parse_ravencoin_backend_evidence(response)
-        except (TypeError, ValueError):
-            # Never log the untrusted response body.  Malformed self-reporting is not a
-            # reason to skip normal SPV/header verification; it simply provides no evidence.
+            evidence = parse_ravencoin_backend_evidence(response)
+        except BackendEvidenceError as exc:
+            self.ravencoin_backend_state = exc.state
+            self.ravencoin_backend_error = _(
+                "Server rejected: malformed Ravencoin backend safety evidence."
+            )
+            # Never log the response body; it is untrusted and might contain secrets.
             self.logger.info('server returned malformed Ravencoin backend evidence')
+            if required:
+                raise GracefulDisconnect(self.ravencoin_backend_error) from exc
             return None
+        if self.server_version is not None and evidence.server_version != self.server_version:
+            self.ravencoin_backend_state = BackendEligibilityState.BACKEND_MALFORMED
+            self.ravencoin_backend_error = _(
+                "Server rejected: conflicting ElectrumX server identity evidence."
+            )
+            if required:
+                raise GracefulDisconnect(self.ravencoin_backend_error)
+            return None
+        state = classify_backend_evidence(evidence)
+        self.ravencoin_backend_state = state
+        if state != BackendEligibilityState.SAFE_CORE_VERIFIED:
+            self.ravencoin_backend_error = backend_rejection_message(evidence, state)
+            if required:
+                raise GracefulDisconnect(self.ravencoin_backend_error)
+            return evidence
+        self.ravencoin_backend_error = None
+        return evidence
 
     async def monitor_connection(self):
         while True:
@@ -797,14 +859,33 @@ class Interface(Logger):
             self.tip = height
             if self.tip < constants.net.max_checkpoint():
                 raise GracefulDisconnect('server tip below max checkpoint')
-            self._mark_ready()
-            blockchain_updated = await self._process_header_at_tip()
+            blockchain_updated = await self._validate_tip_and_mark_ready()
             # header processing done
             if blockchain_updated:
                 util.trigger_callback('blockchain_updated')
             util.trigger_callback('network_updated')
             await self.network.switch_unwanted_fork_interface()
             await self.network.switch_lagging_interface()
+
+    async def _validate_tip_and_mark_ready(self) -> bool:
+        """Keep an interface out of the usable pool until its chain is verified."""
+        try:
+            blockchain_updated = await self._process_header_at_tip()
+        except Exception:
+            self.chain_validation_state = "CONFLICT"
+            self.ravencoin_backend_state = BackendEligibilityState.CHAIN_CONFLICT
+            raise
+        self.chain_validation_state = "VERIFIED"
+        self._mark_ready()
+        return blockchain_updated
+
+    @property
+    def is_safe_ravencoin_mainnet_endpoint(self) -> bool:
+        return (
+            self.ravencoin_backend_state == BackendEligibilityState.SAFE_CORE_VERIFIED
+            and self.chain_validation_state == "VERIFIED"
+            and self.ravencoin_backend is not None
+        )
 
     async def _process_header_at_tip(self) -> bool:
         """Returns:

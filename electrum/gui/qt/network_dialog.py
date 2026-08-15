@@ -158,7 +158,28 @@ class NodesListWidget(QTreeWidget):
                 item = QTreeWidgetItem([f"{i.server.to_friendly_name()}", '%d'%i.tip])
                 item.setData(0, self.ITEMTYPE_ROLE, self.ItemType.CONNECTED_SERVER)
                 item.setData(0, self.SERVER_ADDR_ROLE, i.server)
-                item.setToolTip(0, str(i.server))
+                backend = i.ravencoin_backend
+                if backend is not None:
+                    tooltip = "\n".join((
+                        str(i.server),
+                        _("ElectrumX server: {}").format(backend.server_version),
+                        _("Ravencoin Core: {} ({})").format(
+                            backend.core_version, backend.core_subversion
+                        ),
+                        _("Backend network: {}").format(backend.network),
+                        _("Backend blocks/headers: {}/{}").format(
+                            backend.blocks, backend.headers
+                        ),
+                        _("Backend safety: {}").format(i.ravencoin_backend_state.value),
+                        _("Chain validation: {}").format(i.chain_validation_state),
+                        _("Endpoint eligibility: {}").format(
+                            "ELIGIBLE" if i.is_safe_ravencoin_mainnet_endpoint
+                            else "INELIGIBLE"
+                        ),
+                    ))
+                else:
+                    tooltip = str(i.server)
+                item.setToolTip(0, tooltip)
                 if i == network.interface:
                     item.setIcon(0, read_QIcon("chevron-right.png"))
                 x.addChild(item)

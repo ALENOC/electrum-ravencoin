@@ -3,12 +3,14 @@
       "pruning": "-",
       "s": "50002",
       "t": "50001",
-      "version": "1.11"
+      "version": "1.11",
+      "backend_policy": "historical-unverified; live capability required"
     },
     "aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion": {
       "pruning": "-",
       "s": "50002",
       "t": "50001",
-      "version": "1.11"
+      "version": "1.11",
+      "backend_policy": "historical-unverified; live capability required"
     }
 }
