@@ -1,4 +1,19 @@
-This software will no longer be updated by me. If you'd like to maintain this software, please reach out.
+# Electrum Ravencoin — community-maintained compatibility fork
+
+This repository is a community-maintained fork of
+[`Electrum-RVN-SIG/electrum-ravencoin`](https://github.com/Electrum-RVN-SIG/electrum-ravencoin).
+It is not an official Ravencoin or Electrum release. Original copyright, MIT licensing,
+and upstream attribution are preserved.
+
+The current maintenance branch focuses narrowly on compatibility with maintained
+ElectrumX-RVN servers and their optional `server.ravencoin_backend` diagnostic method.
+That response keeps the server software version separate from its Ravencoin Core backend
+version. It is self-reported evidence only: normal header and SPV verification remains
+mandatory, and legacy community servers that return `method not found` continue to work.
+
+No wallet-format, seed, private-key, hardware-wallet, or transaction-signing behavior is
+changed by this compatibility work. Source and tests are the immediate deliverable; no new
+wallet binary release is implied by this branch.
 
 _(If you've come here looking to simply run Electrum Ravencoin, you may download a prebuilt binary for
 [windows](https://github.com/Electrum-RVN-SIG/electrum-ravencoin/releases/download/v1.2.1/electrum-ravencoin-v1.2.1-setup.exe),
