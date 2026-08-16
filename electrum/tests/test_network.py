@@ -11,6 +11,7 @@ from electrum.util import OldTaskGroup
 from electrum import util
 
 from . import ElectrumTestCase
+from . import regtest_fixtures
 
 
 class MockNetwork:
@@ -49,7 +50,7 @@ class TestNetwork(ElectrumTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        constants.set_regtest()
+        regtest_fixtures.set_regtest()
 
     @classmethod
     def tearDownClass(cls):
@@ -137,5 +138,5 @@ class TestNetwork(ElectrumTestCase):
 
 
 if __name__=="__main__":
-    constants.set_regtest()
+    regtest_fixtures.set_regtest()
     unittest.main()

@@ -37,6 +37,7 @@ import concurrent
 from concurrent import futures
 import copy
 import functools
+from math import ceil
 import urllib.parse
 from enum import Enum, IntEnum
 
@@ -1104,12 +1105,21 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
             for _, members in sorted(groups.items())
         ]
         try:
-            min_height = min(r.blockchain.height() for r in representatives)
+            heights = [r.blockchain.height() for r in representatives]
         except BaseException:
             return WriteAuthorization(
                 WriteAuthorizationState.UNVERIFIED_CHAIN,
                 "operator chain heights unavailable",
                 len(groups))
+        # Witness heights are block heights: plain integers. A float/bool/str
+        # height is malformed evidence (however close) and fails closed rather
+        # than being silently truncated somewhere downstream.
+        if any(type(h) is not int for h in heights):
+            return WriteAuthorization(
+                WriteAuthorizationState.UNVERIFIED_CHAIN,
+                "operator chain height is not an integer",
+                len(groups))
+        min_height = min(heights)
 
         # Freshness: agreement over an old window must never stand in for
         # agreement about the present. The bar is the best tip ANY connected
@@ -1182,13 +1192,14 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
         for iface in ifaces:
             height = getattr(iface, 'tip', 0) or 0
             try:
-                height = max(int(height), int(iface.blockchain.height()))
+                # ceil so a fractional tip can only RAISE the freshness bar
+                height = max(ceil(height), ceil(iface.blockchain.height()))
             except BaseException:
                 # A raising/lying height() must not crash the gate or erase
                 # this interface's server-reported tip: fall back to the tip
                 # alone (which can only keep the freshness bar high).
                 try:
-                    height = int(height)
+                    height = ceil(height)
                 except BaseException:
                     continue
             tips.append(height)

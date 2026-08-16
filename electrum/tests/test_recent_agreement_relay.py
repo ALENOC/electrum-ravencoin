@@ -255,6 +255,28 @@ class TestRecentChainAgreement(ElectrumTestCase):
         b.blockchain.height = Mock(side_effect=RuntimeError("boom"))
         self.assertEqual(WriteAuthorizationState.UNVERIFIED_CHAIN, self._auth(make_net(a, b)).state)
 
+    def test_J4_non_integer_height_blocks(self):
+        """A witness height that is not a plain int (float/bool/str) is
+        malformed evidence and must fail closed, not be truncated into the
+        window or freshness arithmetic (phase-6 'wrong type' attack)."""
+        for bad in (H + 0.5, float(H), True, "4000000"):
+            a = make_iface("a1.example")
+            b = make_iface("b1.example", height=bad, tip=bad)
+            self.assertEqual(
+                WriteAuthorizationState.UNVERIFIED_CHAIN,
+                self._auth(make_net(a, b)).state,
+                msg=f"height={bad!r}")
+
+    def test_J5_fractional_tip_cannot_lower_freshness_bar(self):
+        """A fractional server-reported tip must round the freshness bar UP
+        (ceil), never truncate it down: honest A+B at H with a connected
+        spammer claiming tip H+2.5 must read as lag 3, not 2."""
+        a = make_iface("a1.example", height=H, tip=H)
+        b = make_iface("b1.example", height=H, tip=H)
+        spam = make_iface("unknown.example", height=H, tip=H + 2.5)
+        self.assertEqual(WriteAuthorizationState.STALE_CHAIN_EVIDENCE,
+                         self._auth(make_net(a, b, spam)).state)
+
     def test_J3_connected_height_exception_does_not_crash_gate(self):
         """A connected interface (even a non-voting one) whose height() raises
         must not break evidence gathering; its server-reported tip still
