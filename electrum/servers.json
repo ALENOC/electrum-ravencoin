@@ -4,13 +4,15 @@
       "s": "50002",
       "t": "50001",
       "version": "1.11",
-      "backend_policy": "historical-unverified; live capability required"
+      "backend_policy": "historical-unverified; live capability required",
+      "operatorGroup": "rvn4lyfe"
     },
     "aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion": {
       "pruning": "-",
       "s": "50002",
       "t": "50001",
       "version": "1.11",
-      "backend_policy": "historical-unverified; live capability required"
+      "backend_policy": "historical-unverified; live capability required",
+      "operatorGroup": "rvn4lyfe"
     }
 }

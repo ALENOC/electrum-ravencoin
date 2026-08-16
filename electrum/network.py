@@ -38,7 +38,7 @@ from concurrent import futures
 import copy
 import functools
 import urllib.parse
-from enum import IntEnum
+from enum import Enum, IntEnum
 
 import aiorpcx
 from aiorpcx import ignore_after
@@ -205,6 +205,72 @@ def deserialize_proxy(s: Optional[str]) -> Optional[dict]:
 class BestEffortRequestFailed(NetworkException): pass
 
 
+class WriteAuthorizationState(str, Enum):
+    """The canonical outcome of Network.get_write_authorization().
+
+    interface.ready, SAFE_CORE_VERIFIED, and chain_validation_state ==
+    VERIFIED are each necessary but not sufficient for a sensitive write
+    (transaction broadcast): a single server, however perfectly it claims
+    those states, is still one operator, and light KAWPOW verification
+    (server-policy F2) means one operator alone can fabricate a
+    post-checkpoint chain that satisfies them. Broadcast additionally
+    requires independent agreement across at least MIN_INDEPENDENT_OPERATOR_GROUPS
+    distinct, individually-validated operators.
+    """
+    AUTHORIZED = "AUTHORIZED"
+    #: Fewer than MIN_INDEPENDENT_OPERATOR_GROUPS distinct, individually
+    #: validated operator groups are currently available. This is the
+    #: default state with the shipped server list, which is a single
+    #: operator (rvn4lyfe.com plus its .onion mirror) -- broadcast is
+    #: blocked until a genuinely independent second operator is connected.
+    INSUFFICIENT_OPERATOR_DIVERSITY = "INSUFFICIENT_OPERATOR_DIVERSITY"
+    #: At least two independent operator groups are validated, but they do
+    #: not agree on the chain at their common ancestor. This is a security
+    #: conflict, not a vote: neither side wins by endpoint count or
+    #: connection order.
+    CHAIN_CONFLICT = "CHAIN_CONFLICT"
+    #: No interface has completed the backend-claim and chain-validation
+    #: gates yet (nothing individually safe to even group).
+    UNVERIFIED_CHAIN = "UNVERIFIED_CHAIN"
+
+
+class WriteAuthorization(NamedTuple):
+    state: WriteAuthorizationState
+    reason: str
+    operator_group_count: int
+
+
+#: A single operator, however many endpoints it runs, is not independent
+#: consensus. Two is the minimum for "independent agreement" to mean
+#: anything; this is deliberately not configurable from a remote source.
+MIN_INDEPENDENT_OPERATOR_GROUPS = 2
+
+#: Common-ancestor comparison depth below each candidate operator's own
+#: validated chain tip. Two honest, independently-operated servers can
+#: legitimately differ by a block or two right at the tip (propagation
+#: delay is not dishonesty); comparing raw tips would manufacture spurious
+#: CHAIN_CONFLICT results and make agreement flaky. Comparing an
+#: already-buried common ancestor avoids that while still catching a
+#: genuinely different chain.
+OPERATOR_AGREEMENT_DEPTH = 6
+
+
+def operator_group_for_server(server: 'ServerAddr') -> Optional[str]:
+    """Best-effort operator identity for a server, from the shipped server
+    list only (constants.net.DEFAULT_SERVERS). A server that is not in that
+    list -- including any the user added manually -- has no known operator
+    identity here, and returns None. None must never be treated as its own
+    independent group: an absent identity is not evidence of independence
+    (server-policy: unknown/missing operatorGroup must not silently create
+    a new independent group).
+    """
+    entry = constants.net.DEFAULT_SERVERS.get(server.host)
+    if not isinstance(entry, dict):
+        return None
+    group = entry.get('operatorGroup')
+    return group if isinstance(group, str) and group else None
+
+
 class TxBroadcastError(NetworkException):
     def get_message_for_gui(self):
         raise NotImplementedError()
@@ -231,6 +297,32 @@ class TxBroadcastUnknownError(TxBroadcastError):
         return "{}\n{}" \
             .format(_("Unknown error when broadcasting the transaction."),
                     _("Consider trying to connect to a different server, or updating Electrum."))
+
+
+class BroadcastNotAuthorized(TxBroadcastError):
+    """Raised instead of sending the RPC when Network.get_write_authorization()
+    does not return AUTHORIZED. This is a security decision, not a network
+    failure: the message must say so plainly rather than suggesting the
+    problem is connectivity.
+    """
+    def __init__(self, authorization: WriteAuthorization):
+        self.authorization = authorization
+        super().__init__(authorization.state.value, authorization.reason)
+
+    def get_message_for_gui(self):
+        state = self.authorization.state
+        if state == WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY:
+            return _("Broadcast blocked: insufficient independent server consensus.\n"
+                     "At least {n} independently-operated, individually verified servers "
+                     "are required before this wallet will send a transaction.")\
+                .format(n=MIN_INDEPENDENT_OPERATOR_GROUPS)
+        if state == WriteAuthorizationState.CHAIN_CONFLICT:
+            return _("Broadcast blocked: independent servers disagree about the current "
+                     "blockchain. This can indicate a compromised or malicious server; "
+                     "the transaction was not sent.")
+        return _("Broadcast blocked: server backend and chain verification has not "
+                 "completed yet. This is a security check, not a connectivity problem; "
+                 "please wait and try again.")
 
 
 class UntrustedServerReturnedError(NetworkException):
@@ -919,6 +1011,68 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
             raise RequestTimedOut()
         return await self.interface.get_merkle_for_transaction(tx_hash=tx_hash, tx_height=tx_height)
 
+    def _validated_interfaces(self) -> List[Interface]:
+        """Currently connected interfaces that individually passed both the
+        backend-claim gate and chain validation. Being in this list is
+        necessary but not sufficient for write authorization: it is still
+        per-interface, single-server state (server-policy F2)."""
+        with self.interfaces_lock:
+            ifaces = list(self.interfaces.values())
+        return [i for i in ifaces if i.is_safe_ravencoin_mainnet_endpoint]
+
+    def get_write_authorization(self) -> WriteAuthorization:
+        """The single, canonical decision of whether a sensitive write
+        (transaction broadcast) may proceed right now.
+
+        Deliberately a pure function over the currently validated interface
+        set, grouped by operator identity -- not over self.interface or
+        connection order, so the result cannot depend on which validated
+        server happens to be the main one, or on the order interfaces
+        connected in.
+        """
+        validated = self._validated_interfaces()
+        if not validated:
+            return WriteAuthorization(
+                WriteAuthorizationState.UNVERIFIED_CHAIN,
+                "no independently validated server connection yet", 0)
+
+        groups: Dict[str, List[Interface]] = {}
+        for iface in validated:
+            group = operator_group_for_server(iface.server)
+            if group is None:
+                # Unknown operator identity never counts toward diversity,
+                # even though the interface itself is individually safe.
+                continue
+            groups.setdefault(group, []).append(iface)
+
+        if len(groups) < MIN_INDEPENDENT_OPERATOR_GROUPS:
+            return WriteAuthorization(
+                WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY,
+                f"only {len(groups)} independent operator group(s) verified; "
+                f"at least {MIN_INDEPENDENT_OPERATOR_GROUPS} are required for writes",
+                len(groups))
+
+        # One deterministic representative per group: multiple endpoints of
+        # the same operator agreeing with each other proves nothing extra,
+        # and picking one keeps this a pure, order-independent function.
+        representatives = [
+            sorted(members, key=lambda i: i.server.to_friendly_name())[0]
+            for _, members in sorted(groups.items())
+        ]
+        common_height = max(
+            0, min(r.blockchain.height() for r in representatives) - OPERATOR_AGREEMENT_DEPTH)
+        hashes = {r.blockchain.get_hash(common_height) for r in representatives}
+        if len(hashes) > 1:
+            return WriteAuthorization(
+                WriteAuthorizationState.CHAIN_CONFLICT,
+                f"independent operator groups disagree on the chain at height {common_height}",
+                len(groups))
+
+        return WriteAuthorization(
+            WriteAuthorizationState.AUTHORIZED,
+            f"{len(groups)} independent operator groups agree at height {common_height}",
+            len(groups))
+
     @best_effort_reliable
     async def broadcast_transaction(self, tx: 'Transaction', *, timeout=None) -> None:
         if self.interface is None:  # handled by best_effort_reliable
@@ -927,6 +1081,9 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
             timeout = self.get_network_timeout_seconds(NetworkTimeout.Urgent)
         if any(DummyAddress.is_dummy_address(txout.address) for txout in tx.outputs()):
             raise DummyAddressUsedInTxException("tried to broadcast tx with dummy address!")
+        authorization = self.get_write_authorization()
+        if authorization.state != WriteAuthorizationState.AUTHORIZED:
+            raise BroadcastNotAuthorized(authorization)
         try:
             out = await self.interface.session.send_request('blockchain.transaction.broadcast', [tx.serialize()], timeout=timeout)
             # note: both 'out' and exception messages are untrusted input from the server
