@@ -346,6 +346,66 @@ class TestRollbackHighWaterMark(ElectrumTestCase):
             raw = json.dumps(state)
             self.assertNotIn(private_key.private_bytes_raw().hex(), raw)
 
+    def test_cache_replaced_with_older_signed_policy_cannot_undo_a_revocation(self):
+        """The cache-load path must enforce the same floor as accept_remote.
+
+        Reproduces the reported bypass exactly: a remote-only release (not in
+        the built-in baseline) is added as KNOWN_SAFE by policy v3, then
+        revoked by policy v5. An attacker with local config-dir write access
+        overwrites only the cache file (leaving the state/high-water file
+        untouched) with the older, still-validly-signed v3 document. Reloading
+        the store must not let that release become KNOWN_SAFE again.
+        """
+        private_key, _trusted, key_id = keypair()
+        original = dict(policy.TRUSTED_POLICY_KEYS)
+        policy.TRUSTED_POLICY_KEYS.clear()
+        policy.TRUSTED_POLICY_KEYS[key_id] = private_key.public_key().public_bytes_raw()
+        try:
+            with tempfile.TemporaryDirectory() as cache_dir:
+                store = policy.PolicyStore(cache_dir)
+                v3_document = sign(private_key, key_id, body(
+                    version=3, releases=[safe_entry(commit=OTHER_COMMIT)]))
+                store.accept_remote(v3_document)
+                self.assertEqual(
+                    "KNOWN_SAFE",
+                    policy.lookup(store.effective(), "2miners/Ravencoin",
+                                 OTHER_COMMIT)["status"])
+
+                revoked = dict(safe_entry(commit=OTHER_COMMIT))
+                revoked.update({"status": "REVOKED",
+                                "revocationReason": "consensus bug"})
+                revoked.pop("certification")
+                store.accept_remote(sign(private_key, key_id,
+                                         body(version=5, releases=[revoked])))
+                self.assertEqual(
+                    "REVOKED",
+                    policy.lookup(store.effective(), "2miners/Ravencoin",
+                                 OTHER_COMMIT)["status"])
+
+                # Attacker overwrites only the cache with the older, still
+                # validly signed v3 document. The state/high-water file, which
+                # already recorded 5, is left untouched.
+                with open(os.path.join(cache_dir, policy.POLICY_CACHE_FILENAME),
+                          "w") as f:
+                    json.dump(v3_document, f)
+
+                reopened = policy.PolicyStore(cache_dir)
+                # The high-water floor must still reflect the accepted v5.
+                self.assertGreaterEqual(reopened.policy_version, 5)
+                # The tampered cache must be ignored entirely: OTHER_COMMIT
+                # must not read back as KNOWN_SAFE. The baseline never
+                # mentions it, so the honest outcome is "not present".
+                reloaded_entry = policy.lookup(reopened.effective(),
+                                               "2miners/Ravencoin", OTHER_COMMIT)
+                self.assertIsNone(reloaded_entry)
+                # And a direct network replay of that same stale policy is
+                # refused too.
+                with self.assertRaises(policy.PolicyError):
+                    reopened.accept_remote(v3_document)
+        finally:
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS.update(original)
+
     def test_corrupt_state_file_does_not_lower_the_floor_below_the_cache(self):
         private_key, _trusted, key_id = keypair()
         with tempfile.TemporaryDirectory() as cache_dir:

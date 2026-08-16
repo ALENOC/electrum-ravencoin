@@ -298,7 +298,14 @@ class PolicyStore(Logger):
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 document = json.load(handle)
-            return verify_signed_policy(document)
+            # The cache file can be replaced by anything with local write access
+            # to the config directory: a validly signed but older policy is not
+            # a forgery, so signature and schema checks alone would accept it.
+            # The high-water mark (self._high_water, already loaded from the
+            # state file above) is what turns that into a rollback and must
+            # gate the cache path exactly as it gates accept_remote().
+            return verify_signed_policy(
+                document, minimum_policy_version=self._high_water)
         except (OSError, json.JSONDecodeError, PolicyError) as exc:
             self.logger.info(f"ignoring cached safe-Core policy: {exc}")
             return None
