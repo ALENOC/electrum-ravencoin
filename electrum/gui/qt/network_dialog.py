@@ -23,6 +23,7 @@
 # CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import html
 import socket
 import time
 from enum import IntEnum
@@ -160,21 +161,28 @@ class NodesListWidget(QTreeWidget):
                 item.setData(0, self.SERVER_ADDR_ROLE, i.server)
                 backend = i.ravencoin_backend
                 if backend is not None:
+                    # server_version/core_version/core_subversion/network are
+                    # self-reported by the remote server: escape before display
+                    # so a hostile value cannot be interpreted as rich text by
+                    # the tooltip renderer (it is never executable, but this
+                    # keeps it from also being visually spoofable).
                     tooltip = "\n".join((
                         str(i.server),
-                        _("ElectrumX server: {}").format(backend.server_version),
-                        _("Ravencoin Core: {} ({})").format(
-                            backend.core_version, backend.core_subversion
+                        _("ElectrumX server: {}").format(html.escape(backend.server_version)),
+                        _("Ravencoin Core reported by server, not independently "
+                          "attested: {} ({})").format(
+                            html.escape(backend.core_version),
+                            html.escape(backend.core_subversion),
                         ),
-                        _("Backend network: {}").format(backend.network),
+                        _("Backend network: {}").format(html.escape(backend.network)),
                         _("Backend blocks/headers: {}/{}").format(
                             backend.blocks, backend.headers
                         ),
-                        _("Backend safety: {}").format(i.ravencoin_backend_state.value),
-                        _("Chain validation: {}").format(i.chain_validation_state),
-                        _("Endpoint eligibility: {}").format(
-                            "ELIGIBLE" if i.is_safe_ravencoin_mainnet_endpoint
-                            else "INELIGIBLE"
+                        _("Backend release claim: {}").format(i.ravencoin_backend_state.value),
+                        _("Independent chain validation: {}").format(i.chain_validation_state),
+                        _("Verified safe for use: {}").format(
+                            _("YES") if i.is_safe_ravencoin_mainnet_endpoint
+                            else _("NO")
                         ),
                     ))
                 else:

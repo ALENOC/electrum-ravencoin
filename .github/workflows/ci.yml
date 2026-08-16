@@ -50,7 +50,9 @@ jobs:
           python -m pytest -q \
             electrum/tests/test_core_safety_policy.py \
             electrum/tests/test_core_safety_directory.py \
-            electrum/tests/test_ravencoin_backend.py
+            electrum/tests/test_ravencoin_backend.py \
+            electrum/tests/test_interface.py \
+            electrum/tests/test_blockchain.py::TestKawpowNHeightValidation
 
       - name: Compile checks
         run: python -m compileall -q electrum

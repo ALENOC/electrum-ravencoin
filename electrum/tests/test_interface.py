@@ -153,6 +153,31 @@ class TestRequiredRavencoinBackendCapability(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(BackendEligibilityState.CHAIN_CONFLICT,
                          interface.ravencoin_backend_state)
 
+    async def test_perfect_backend_claim_with_chain_conflict_is_never_verified_safe(self):
+        """SAFE_CORE_VERIFIED is a self-reported claim, not remote-binary
+        attestation (F4): a malicious server can make the backend-gate state
+        SAFE_CORE_VERIFIED purely by claiming the certified identity, but that
+        alone must never be enough to use the server. The independent chain
+        leg still has to agree, and a conflict there must sink the whole
+        endpoint regardless of how perfect the backend claim looked.
+        """
+        interface = self.interface_with_response(backend_response())
+        interface.ravencoin_backend = await interface.request_ravencoin_backend_evidence(
+            required=True
+        )
+        self.assertEqual(BackendEligibilityState.SAFE_CORE_VERIFIED,
+                         interface.ravencoin_backend_state)
+        interface._process_header_at_tip = AsyncMock(
+            side_effect=GracefulDisconnect("checkpoint conflict")
+        )
+        interface._mark_ready = Mock()
+        with self.assertRaises(GracefulDisconnect):
+            await interface._validate_tip_and_mark_ready()
+        interface._mark_ready.assert_not_called()
+        self.assertFalse(interface.is_safe_ravencoin_mainnet_endpoint)
+        self.assertEqual(BackendEligibilityState.CHAIN_CONFLICT,
+                         interface.ravencoin_backend_state)
+
     async def test_valid_chain_marks_safe_interface_ready(self):
         interface = self.interface_with_response(backend_response())
         interface.ravencoin_backend = await interface.request_ravencoin_backend_evidence(
