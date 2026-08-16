@@ -19,7 +19,7 @@ from electrum.network import (
     BroadcastNotAuthorized,
     MIN_INDEPENDENT_OPERATOR_GROUPS,
     Network,
-    OPERATOR_AGREEMENT_DEPTH,
+    RECENT_AGREEMENT_WINDOW,
     WriteAuthorizationState,
     operator_group_for_server,
 )
@@ -67,8 +67,12 @@ def _safe_interface(host: str, *, height: int = HONEST_HEIGHT, chain_hash: str =
     iface.session = Mock()
     iface.session.send_request = AsyncMock(return_value="ff" * 32)
     iface.logger = Mock()
-    iface.ready = None
-    iface.got_disconnected = None
+    # readiness primitives for _validated_interfaces()/revalidation checks
+    iface.ready = Mock()
+    iface.ready.done = Mock(return_value=True)
+    iface.got_disconnected = Mock()
+    iface.got_disconnected.is_set = Mock(return_value=False)
+    iface.tip = height
     return iface
 
 
@@ -168,17 +172,20 @@ class TestWriteAuthorizationGate(ElectrumTestCase):
         self.assertEqual(WriteAuthorizationState.AUTHORIZED, auth_ba.state)
 
     def test_minor_tip_divergence_between_honest_operators_is_not_a_conflict(self):
-        """Two honest, independent operators one block apart at the tip
-        (propagation delay) must not manufacture a false CHAIN_CONFLICT --
-        agreement is checked at a buried common ancestor, not the raw tip."""
+        """Two honest, independent operators a couple of blocks apart at the
+        tip (propagation delay) must not manufacture a false CHAIN_CONFLICT:
+        the recent-agreement window ends at the *shortest* validated tip, so
+        normal lag within MAX_WITNESS_TIP_LAG stays usable."""
         a = _safe_interface("cipig-a.example", height=HONEST_HEIGHT, chain_hash=HONEST_HASH)
         b = _safe_interface("independent.example", height=HONEST_HEIGHT - 2, chain_hash=HONEST_HASH)
         net = _network_with_interfaces(a, b)
         with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
             auth = net.get_write_authorization()
         self.assertEqual(WriteAuthorizationState.AUTHORIZED, auth.state)
-        # sanity: the comparison genuinely happened below both tips
-        a.blockchain.get_hash.assert_called_with(HONEST_HEIGHT - 2 - OPERATOR_AGREEMENT_DEPTH)
+        # sanity: the window genuinely ended at the shortest tip
+        self.assertEqual(HONEST_HEIGHT - 2, auth.window_tip)
+        self.assertEqual(HONEST_HEIGHT - 2 - RECENT_AGREEMENT_WINDOW + 1, auth.window_start)
+        a.blockchain.get_hash.assert_called_with(HONEST_HEIGHT - 2)
 
     def test_unknown_operator_endpoint_does_not_count_toward_diversity(self):
         """Case (Step 11): a valid-looking, individually-safe server with no

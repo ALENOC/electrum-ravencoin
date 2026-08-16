@@ -229,15 +229,32 @@ class WriteAuthorizationState(str, Enum):
     #: conflict, not a vote: neither side wins by endpoint count or
     #: connection order.
     CHAIN_CONFLICT = "CHAIN_CONFLICT"
+    #: At least two independent operator groups are validated, but the
+    #: shortest validated tip among them is too far behind the best tip any
+    #: connected interface reports. Their agreement covers only the past;
+    #: it is stale evidence for a write that depends on the present chain.
+    STALE_CHAIN_EVIDENCE = "STALE_CHAIN_EVIDENCE"
     #: No interface has completed the backend-claim and chain-validation
-    #: gates yet (nothing individually safe to even group).
+    #: gates yet (nothing individually safe to even group), or the chain
+    #: evidence needed for the recent-agreement window is
+    #: missing/incomplete/exceptional.
     UNVERIFIED_CHAIN = "UNVERIFIED_CHAIN"
 
 
 class WriteAuthorization(NamedTuple):
+    """On AUTHORIZED this is an authorization *capability*, not a verdict:
+    it names the exact Interface objects whose evidence produced the decision
+    and the single relay target bound to it. Anything outside
+    ``participant_interfaces`` (in particular an arbitrary ``self.interface``)
+    is not authorized to relay by this result."""
     state: WriteAuthorizationState
     reason: str
     operator_group_count: int
+    participant_interfaces: Tuple['Interface', ...] = ()
+    relay_interface: Optional['Interface'] = None
+    window_start: Optional[int] = None
+    window_tip: Optional[int] = None
+    window_hashes: Tuple[str, ...] = ()
 
 
 #: A single operator, however many endpoints it runs, is not independent
@@ -245,14 +262,27 @@ class WriteAuthorization(NamedTuple):
 #: anything; this is deliberately not configurable from a remote source.
 MIN_INDEPENDENT_OPERATOR_GROUPS = 2
 
-#: Common-ancestor comparison depth below each candidate operator's own
-#: validated chain tip. Two honest, independently-operated servers can
-#: legitimately differ by a block or two right at the tip (propagation
-#: delay is not dishonesty); comparing raw tips would manufacture spurious
-#: CHAIN_CONFLICT results and make agreement flaky. Comparing an
-#: already-buried common ancestor avoids that while still catching a
-#: genuinely different chain.
-OPERATOR_AGREEMENT_DEPTH = 6
+#: Length of the recent-chain window every authorized operator group must
+#: agree on, hash-for-hash, ending at the shortest validated tip among the
+#: groups. Chains diverge at *every* height above a fork point, so comparing
+#: the whole window detects any fork at or below that shortest tip (including
+#: forks far below the window, whose divergence persists up through it, and
+#: including the old single-anchor bypass geometry of a fork one block above
+#: ``min(heights) - 6``). Honest servers a block or two apart at the tip are
+#: handled by comparing at the *shortest* tip, not by comparing less history.
+#: 12 blocks is ~12 minutes of Ravencoin mainnet history and comfortably
+#: covers the old ``- 6`` anchor region.
+RECENT_AGREEMENT_WINDOW = 12
+
+#: How far any witness group's validated tip may lag behind the best tip
+#: observed by ANY connected interface before its evidence counts as stale.
+#: Blocks above the shortest witness tip cannot be cross-checked between
+#: witnesses (no one else has seen them yet), so this bound is what caps a
+#: taller fabricated chain: a malicious group can claim at most this many
+#: unseen blocks above the honest frontier before freshness fails closed.
+#: 2 blocks is ~2 minutes of propagation/validation slack between honest
+#: servers; availability of writes is secondary to their safety.
+MAX_WITNESS_TIP_LAG = 2
 
 
 def operator_group_for_server(server: 'ServerAddr') -> Optional[str]:
@@ -320,6 +350,10 @@ class BroadcastNotAuthorized(TxBroadcastError):
             return _("Broadcast blocked: independent servers disagree about the current "
                      "blockchain. This can indicate a compromised or malicious server; "
                      "the transaction was not sent.")
+        if state == WriteAuthorizationState.STALE_CHAIN_EVIDENCE:
+            return _("Broadcast blocked: the independently verified servers are behind "
+                     "the current chain tip, so their agreement does not cover the "
+                     "present blockchain. Please wait for them to catch up and retry.")
         return _("Broadcast blocked: server backend and chain verification has not "
                  "completed yet. This is a security check, not a connectivity problem; "
                  "please wait and try again.")
@@ -1013,12 +1047,15 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
 
     def _validated_interfaces(self) -> List[Interface]:
         """Currently connected interfaces that individually passed both the
-        backend-claim gate and chain validation. Being in this list is
-        necessary but not sufficient for write authorization: it is still
-        per-interface, single-server state (server-policy F2)."""
+        backend-claim gate and chain validation and are still connected and
+        ready (a disconnecting or stalled interface is not live evidence).
+        Being in this list is necessary but not sufficient for write
+        authorization: it is still per-interface, single-server state
+        (server-policy F2)."""
         with self.interfaces_lock:
             ifaces = list(self.interfaces.values())
-        return [i for i in ifaces if i.is_safe_ravencoin_mainnet_endpoint]
+        return [i for i in ifaces
+                if i.is_connected_and_ready() and i.is_safe_ravencoin_mainnet_endpoint]
 
     def get_write_authorization(self) -> WriteAuthorization:
         """The single, canonical decision of whether a sensitive write
@@ -1028,7 +1065,14 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
         set, grouped by operator identity -- not over self.interface or
         connection order, so the result cannot depend on which validated
         server happens to be the main one, or on the order interfaces
-        connected in.
+        connected in. Authorization requires RECENT chain consensus: the
+        identical canonical block hash at every height of a bounded window
+        ending at the shortest validated tip, with every witness group's tip
+        current within MAX_WITNESS_TIP_LAG of the best tip any connected
+        interface reports. On success the result is a capability binding the
+        exact participant interfaces and the single relay target; the write
+        must be relayed through that target, never through a re-read
+        self.interface.
         """
         validated = self._validated_interfaces()
         if not validated:
@@ -1059,19 +1103,117 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
             sorted(members, key=lambda i: i.server.to_friendly_name())[0]
             for _, members in sorted(groups.items())
         ]
-        common_height = max(
-            0, min(r.blockchain.height() for r in representatives) - OPERATOR_AGREEMENT_DEPTH)
-        hashes = {r.blockchain.get_hash(common_height) for r in representatives}
-        if len(hashes) > 1:
+        try:
+            min_height = min(r.blockchain.height() for r in representatives)
+        except BaseException:
             return WriteAuthorization(
-                WriteAuthorizationState.CHAIN_CONFLICT,
-                f"independent operator groups disagree on the chain at height {common_height}",
+                WriteAuthorizationState.UNVERIFIED_CHAIN,
+                "operator chain heights unavailable",
                 len(groups))
 
+        # Freshness: agreement over an old window must never stand in for
+        # agreement about the present. The bar is the best tip ANY connected
+        # interface reports (server-reported tips only ever raise the bar,
+        # which can block writes -- fail closed -- but never lower it).
+        best_tip = max(self._connected_tip_heights())
+        if best_tip - min_height > MAX_WITNESS_TIP_LAG:
+            return WriteAuthorization(
+                WriteAuthorizationState.STALE_CHAIN_EVIDENCE,
+                f"shortest verified operator tip {min_height} lags the best "
+                f"observed tip {best_tip} by more than {MAX_WITNESS_TIP_LAG}",
+                len(groups))
+
+        # Recent-chain consensus: every group must show the identical
+        # canonical block hash at EVERY height of the window ending at the
+        # shortest validated tip. Chains diverge at all heights above a fork
+        # point, so this catches any fork at or below that tip; anything
+        # missing, partial or exceptional while gathering the evidence fails
+        # closed rather than authorizing on incomplete proof.
+        if min_height < RECENT_AGREEMENT_WINDOW:
+            return WriteAuthorization(
+                WriteAuthorizationState.UNVERIFIED_CHAIN,
+                "chain too short to prove recent agreement",
+                len(groups))
+        window_start = min_height - RECENT_AGREEMENT_WINDOW + 1
+        try:
+            windows = {
+                tuple(r.blockchain.get_hash(height)
+                      for height in range(window_start, min_height + 1))
+                for r in representatives
+            }
+        except BaseException:
+            return WriteAuthorization(
+                WriteAuthorizationState.UNVERIFIED_CHAIN,
+                "recent chain evidence missing or unavailable",
+                len(groups))
+        if len(windows) > 1:
+            return WriteAuthorization(
+                WriteAuthorizationState.CHAIN_CONFLICT,
+                f"independent operator groups disagree on the chain in "
+                f"heights {window_start}..{min_height}",
+                len(groups))
+
+        # Relay target is bound here, inside the authorization decision: the
+        # main interface if it is itself a participant, else the
+        # deterministic (lexically first) participant. broadcast_transaction
+        # must send through this object and nothing else.
+        relay_interface = next(
+            (r for r in representatives if self.interface is r),
+            min(representatives, key=lambda i: i.server.to_friendly_name()))
         return WriteAuthorization(
             WriteAuthorizationState.AUTHORIZED,
-            f"{len(groups)} independent operator groups agree at height {common_height}",
-            len(groups))
+            f"{len(groups)} independent operator groups agree on all "
+            f"{RECENT_AGREEMENT_WINDOW} recent blocks through height {min_height}",
+            len(groups),
+            participant_interfaces=tuple(representatives),
+            relay_interface=relay_interface,
+            window_start=window_start,
+            window_tip=min_height,
+            window_hashes=next(iter(windows)))
+
+    def _connected_tip_heights(self) -> List[int]:
+        """Best-effort current heights of all connected interfaces: the
+        server-reported tip and the locally validated chain height, whichever
+        is larger. Untrusted values are fine here: they can only raise the
+        freshness bar (blocking writes), never authorize one."""
+        with self.interfaces_lock:
+            ifaces = list(self.interfaces.values())
+        tips = []
+        for iface in ifaces:
+            height = getattr(iface, 'tip', 0) or 0
+            try:
+                height = max(int(height), int(iface.blockchain.height()))
+            except BaseException:
+                # A raising/lying height() must not crash the gate or erase
+                # this interface's server-reported tip: fall back to the tip
+                # alone (which can only keep the freshness bar high).
+                try:
+                    height = int(height)
+                except BaseException:
+                    continue
+            tips.append(height)
+        return tips or [0]
+
+    def _relay_target_still_authorized(self, authorization: WriteAuthorization) -> bool:
+        """Pre-send revalidation of the capability-bound relay target: the
+        exact Interface object that participated in the authorization must
+        still be the registered, connected, ready, individually-safe endpoint
+        of a known operator group. A replacement Interface object for the
+        same host is NOT the authorized object."""
+        target = authorization.relay_interface
+        if target is None:
+            return False
+        if not any(target is participant for participant in authorization.participant_interfaces):
+            return False
+        with self.interfaces_lock:
+            registered = self.interfaces.get(target.server)
+        if registered is not target:
+            return False
+        if not target.is_connected_and_ready():
+            return False
+        if not target.is_safe_ravencoin_mainnet_endpoint:
+            return False
+        return operator_group_for_server(target.server) is not None
 
     @best_effort_reliable
     async def broadcast_transaction(self, tx: 'Transaction', *, timeout=None) -> None:
@@ -1084,8 +1226,20 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
         authorization = self.get_write_authorization()
         if authorization.state != WriteAuthorizationState.AUTHORIZED:
             raise BroadcastNotAuthorized(authorization)
+        # Defense in depth: the relay target is bound by the authorization
+        # capability above, and nothing awaits between that decision and the
+        # send below, so the evidence and the target cannot drift apart here.
+        # Revalidate anyway (and recompute rather than send) so that any
+        # future change introducing an await, or a stale capability reaching
+        # this point, still cannot relay through an unauthorized interface.
+        if not self._relay_target_still_authorized(authorization):
+            authorization = self.get_write_authorization()
+            if (authorization.state != WriteAuthorizationState.AUTHORIZED
+                    or not self._relay_target_still_authorized(authorization)):
+                raise BroadcastNotAuthorized(authorization)
+        relay_interface = authorization.relay_interface
         try:
-            out = await self.interface.session.send_request('blockchain.transaction.broadcast', [tx.serialize()], timeout=timeout)
+            out = await relay_interface.session.send_request('blockchain.transaction.broadcast', [tx.serialize()], timeout=timeout)
             # note: both 'out' and exception messages are untrusted input from the server
         except (RequestTimedOut, asyncio.CancelledError, asyncio.TimeoutError):
             raise  # pass-through
