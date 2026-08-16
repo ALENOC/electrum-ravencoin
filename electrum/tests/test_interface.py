@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from aiorpcx.jsonrpc import JSONRPC, RPCError
 
@@ -176,6 +176,42 @@ class TestRequiredRavencoinBackendCapability(unittest.IsolatedAsyncioTestCase):
         interface._mark_ready.assert_not_called()
         self.assertFalse(interface.is_safe_ravencoin_mainnet_endpoint)
         self.assertEqual(BackendEligibilityState.CHAIN_CONFLICT,
+                         interface.ravencoin_backend_state)
+
+    async def test_periodic_revalidation_downgrades_a_now_unsafe_backend(self):
+        """F5: SAFE_CORE_VERIFIED must not survive indefinitely on stale
+        evidence. revalidate_backend_periodically re-requests
+        server.ravencoin_backend on a live session; if the server's evidence
+        is no longer safe, the session is torn down exactly like the initial
+        gate rather than staying latched on the first classification.
+        """
+        interface = self.interface_with_response(backend_response())
+        interface.ravencoin_backend = await interface.request_ravencoin_backend_evidence(
+            required=True
+        )
+        self.assertEqual(BackendEligibilityState.SAFE_CORE_VERIFIED,
+                         interface.ravencoin_backend_state)
+        # The server's evidence changes on the next poll: no longer safe.
+        interface.session.send_request = AsyncMock(
+            return_value=backend_response(core_safe=False)
+        )
+        with patch("electrum.interface.asyncio.sleep", new=AsyncMock()):
+            with self.assertRaises(GracefulDisconnect):
+                await interface.revalidate_backend_periodically()
+        self.assertEqual(BackendEligibilityState.BACKEND_UNSAFE,
+                         interface.ravencoin_backend_state)
+
+    async def test_periodic_revalidation_keeps_polling_while_still_safe(self):
+        interface = self.interface_with_response(backend_response())
+        interface.ravencoin_backend = await interface.request_ravencoin_backend_evidence(
+            required=True
+        )
+        sleeps = AsyncMock(side_effect=[None, None, RuntimeError("stop test loop")])
+        with patch("electrum.interface.asyncio.sleep", new=sleeps):
+            with self.assertRaises(RuntimeError):
+                await interface.revalidate_backend_periodically()
+        self.assertEqual(3, sleeps.await_count)
+        self.assertEqual(BackendEligibilityState.SAFE_CORE_VERIFIED,
                          interface.ravencoin_backend_state)
 
     async def test_valid_chain_marks_safe_interface_ready(self):

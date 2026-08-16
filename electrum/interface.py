@@ -79,6 +79,14 @@ BUCKET_NAME_OF_ONION_SERVERS = 'onion'
 
 _KNOWN_NETWORK_PROTOCOLS = {'t', 's'}
 PREFERRED_NETWORK_PROTOCOL = 's'
+
+#: How often an already-connected mainnet interface re-checks its backend
+#: evidence. Chain validation is re-run continuously on every new header, but
+#: the backend gate was previously only ever evaluated once, at connect time
+#: (see server-policy F5): a server could swap identity, or its evidence
+#: could simply go stale, without the session noticing until it disconnected
+#: and reconnected. This bounds how long a session can run on stale evidence.
+BACKEND_REVALIDATION_INTERVAL = 3600
 assert PREFERRED_NETWORK_PROTOCOL in _KNOWN_NETWORK_PROTOCOLS
 
 
@@ -730,6 +738,8 @@ class Interface(Logger):
                     await group.spawn(self.request_fee_estimates)
                     await group.spawn(self.run_fetch_blocks)
                     await group.spawn(self.monitor_connection)
+                    if constants.net.NET_NAME == "mainnet":
+                        await group.spawn(self.revalidate_backend_periodically)
             except aiorpcx.jsonrpc.RPCError as e:
                 if e.code in (
                     JSONRPC.EXCESSIVE_RESOURCE_USAGE,
@@ -803,6 +813,19 @@ class Interface(Logger):
             return evidence
         self.ravencoin_backend_error = None
         return evidence
+
+    async def revalidate_backend_periodically(self):
+        """Re-run the backend gate on a live session so SAFE_CORE_VERIFIED
+        cannot outlive the evidence it was granted on (F5). This does not
+        replace continuous chain validation, which already re-runs on every
+        new tip in run_fetch_blocks; it closes the other leg, which was
+        previously only ever checked once at connect time. A failure here
+        raises GracefulDisconnect exactly like the initial gate, tearing the
+        session down rather than leaving a downgraded state connected.
+        """
+        while True:
+            await asyncio.sleep(BACKEND_REVALIDATION_INTERVAL)
+            await self.request_ravencoin_backend_evidence(required=True)
 
     async def monitor_connection(self):
         while True:
