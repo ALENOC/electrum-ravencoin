@@ -102,11 +102,31 @@ Refreshing the checkpoint data itself requires generating a new,
 spacing-aligned set of (hash, target) pairs from a fully synchronized,
 independently verified Ravencoin Core node (`contrib/checkpoint_generator.py`)
 covering every 2016-block boundary from the current last checkpoint forward.
-That data-generation work was not performed in this remediation pass: no
-trusted, fully synced node was available in this environment to produce and
-independently cross-check several hundred boundary entries, and fabricating
-that data from a single untrusted source (including the wallet's own
-candidate servers) would be exactly the mistake this document warns against.
+
+A fully synced, certified-identity local node became available partway
+through this remediation pass, and the generation method was validated
+against it: regenerating the six existing boundary entries closest to the
+range's start and end (chunk indices 0, 1, 2 and 1543, 1544, 1545 of the
+committed `checkpoints_dgw.json`) reproduced them byte-for-byte, and 516
+new chunks were generated, which would extend the last checkpoint from
+height 3,455,423 to 4,495,679. The remaining blocker is not data
+availability; it is that this project requires more than one authoritative
+source before trusting new checkpoint data (see the source note below), and
+no independent public source was reachable from this environment in this
+pass to cross-check the generated hashes. Shipping trust-anchor data backed
+by only one source, however well-identified, would be exactly the mistake
+this document warns against, so the refresh was not merged.
+
+The cumulative-chainwork cache that anchors fork comparisons
+(`_CHAINWORK_CACHE`, `electrum/blockchain.py`) was reviewed for what moving
+the checkpoint would do to it: the anchor is a purely relative, per-process
+value used only to compare competing chains against each other, both of its
+call sites are ordering comparisons, and chains are already prohibited from
+forking below the last checkpoint, so every chain being compared shares
+identical history up to and including the anchor point regardless of where
+it sits. Moving the checkpoint forward does not change that; this is not a
+blocker for a future refresh.
+
 The residual assumption in the meantime is: checkpoint (currently height
 3,455,423) + exact nHeight validation + chain-continuity/difficulty checks +
 the signed backend-identity policy together bound what a hostile server can
