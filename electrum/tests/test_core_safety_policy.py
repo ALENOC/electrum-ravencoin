@@ -406,6 +406,82 @@ class TestRollbackHighWaterMark(ElectrumTestCase):
             policy.TRUSTED_POLICY_KEYS.clear()
             policy.TRUSTED_POLICY_KEYS.update(original)
 
+    def test_cache_with_wrong_safety_profile_is_never_trusted(self):
+        """N2: _load_cache() must enforce safetyProfile the same way
+        accept_remote() does. A validly-signed document targeting a
+        different profile, planted directly in the cache file at a version
+        above the high-water mark, must not become the effective policy.
+        """
+        private_key, _trusted, key_id = keypair()
+        original = dict(policy.TRUSTED_POLICY_KEYS)
+        policy.TRUSTED_POLICY_KEYS.clear()
+        policy.TRUSTED_POLICY_KEYS[key_id] = private_key.public_key().public_bytes_raw()
+        try:
+            with tempfile.TemporaryDirectory() as cache_dir:
+                store = self._store_with(cache_dir, private_key, key_id, 3)
+                self.assertEqual(3, store.policy_version)
+
+                wrong_profile_document = sign(private_key, key_id, body(
+                    version=7, profile="rvn-consensus-2027-01-v9",
+                    releases=[safe_entry(commit=OTHER_COMMIT)]))
+                with open(os.path.join(cache_dir, policy.POLICY_CACHE_FILENAME),
+                          "w") as f:
+                    json.dump(wrong_profile_document, f)
+
+                reopened = policy.PolicyStore(cache_dir)
+                # Refused entirely: the wrong-profile release must not be
+                # effective, and its version must not raise the floor either
+                # (a refused document is not "accepted at a lower bar").
+                self.assertIsNone(
+                    policy.lookup(reopened.effective(), "2miners/Ravencoin",
+                                 OTHER_COMMIT))
+                self.assertLess(reopened.policy_version, 7)
+                self.assertGreaterEqual(reopened.policy_version, 3)
+        finally:
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS.update(original)
+
+    def test_cache_with_stale_safety_profile_is_refused_after_profile_upgrade(self):
+        """A cache written under a since-superseded REQUIRED_SAFETY_PROFILE
+        must not be trusted once the wallet has moved to a newer profile."""
+        private_key, _trusted, key_id = keypair()
+        original = dict(policy.TRUSTED_POLICY_KEYS)
+        policy.TRUSTED_POLICY_KEYS.clear()
+        policy.TRUSTED_POLICY_KEYS[key_id] = private_key.public_key().public_bytes_raw()
+        old_required_profile = policy.REQUIRED_SAFETY_PROFILE
+        try:
+            with tempfile.TemporaryDirectory() as cache_dir:
+                self._store_with(cache_dir, private_key, key_id, 4)
+                # Simulate a wallet upgrade to a newer required safety
+                # profile; the cache on disk still carries the old one.
+                policy.REQUIRED_SAFETY_PROFILE = "rvn-consensus-2027-01-v9"
+                reopened = policy.PolicyStore(cache_dir)
+                self.assertIsNone(reopened._remote)
+                self.assertEqual(reopened.effective(), reopened._baseline)
+        finally:
+            policy.REQUIRED_SAFETY_PROFILE = old_required_profile
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS.update(original)
+
+    def test_cache_with_malformed_safety_profile_is_refused(self):
+        private_key, _trusted, key_id = keypair()
+        original = dict(policy.TRUSTED_POLICY_KEYS)
+        policy.TRUSTED_POLICY_KEYS.clear()
+        policy.TRUSTED_POLICY_KEYS[key_id] = private_key.public_key().public_bytes_raw()
+        try:
+            with tempfile.TemporaryDirectory() as cache_dir:
+                malformed_body = body(version=6)
+                del malformed_body["safetyProfile"]
+                malformed_document = sign(private_key, key_id, malformed_body)
+                with open(os.path.join(cache_dir, policy.POLICY_CACHE_FILENAME),
+                          "w") as f:
+                    json.dump(malformed_document, f)
+                reopened = policy.PolicyStore(cache_dir)
+                self.assertIsNone(reopened._remote)
+        finally:
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS.update(original)
+
     def test_corrupt_state_file_does_not_lower_the_floor_below_the_cache(self):
         private_key, _trusted, key_id = keypair()
         with tempfile.TemporaryDirectory() as cache_dir:

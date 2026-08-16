@@ -304,8 +304,19 @@ class PolicyStore(Logger):
             # The high-water mark (self._high_water, already loaded from the
             # state file above) is what turns that into a rollback and must
             # gate the cache path exactly as it gates accept_remote().
-            return verify_signed_policy(
+            body = verify_signed_policy(
                 document, minimum_policy_version=self._high_water)
+            # A validly-signed document for a different safetyProfile is not
+            # a forgery either, and verify_signed_policy has no opinion on
+            # profile identity -- accept_remote() checks it explicitly, and
+            # the cache path must refuse it the same way, or a trusted-key
+            # signed wrong-profile document planted in the cache (above the
+            # version floor) would silently become the effective policy.
+            if body["safetyProfile"] != REQUIRED_SAFETY_PROFILE:
+                raise PolicyError(
+                    f"cached policy targets profile {body['safetyProfile']!r} but "
+                    f"this wallet requires {REQUIRED_SAFETY_PROFILE!r}")
+            return body
         except (OSError, json.JSONDecodeError, PolicyError) as exc:
             self.logger.info(f"ignoring cached safe-Core policy: {exc}")
             return None

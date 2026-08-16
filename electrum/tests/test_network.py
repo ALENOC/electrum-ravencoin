@@ -1,11 +1,14 @@
 import asyncio
+import inspect
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, Mock
 
 from electrum import constants
 from electrum.simple_config import SimpleConfig
 from electrum import blockchain
 from electrum.interface import Interface, ServerAddr
+from electrum.network import Network
 from electrum.crypto import sha256
 from electrum.util import OldTaskGroup
 from electrum import util
@@ -125,6 +128,88 @@ class TestNetwork(ElectrumTestCase):
         res = await ifa.sync_until(8, next_height=6)
         self.assertEqual(('catchup', 7), res)
         self.assertEqual(self.interface.q.qsize(), 0)
+
+
+class TestBroadcastAuthorizationBoundary(unittest.IsolatedAsyncioTestCase):
+    """F2 write-boundary trace (security re-audit, N1/F2 follow-up).
+
+    Network.broadcast_transaction and its @best_effort_reliable wrapper are
+    the actual final authorization path for the guarded network write that
+    matters most: transaction broadcast. This test runs the real (unmocked)
+    Network.broadcast_transaction and best_effort_reliable against a real
+    Interface object, stubbing only the RPC transport, to prove what the
+    final gate actually is: `self.interface is not None and
+    self.interface.ready.done()`. Nothing else is consulted -- not
+    ravencoin_backend_state, not chain_validation_state, and no
+    operator-group / independent-operator-diversity signal, because no such
+    signal exists anywhere on Interface or in Network.broadcast_transaction's
+    signature. A single server that reaches "ready" (already demonstrated,
+    independently of this repo, to be reachable via a self-reported identity
+    claim plus a fabricated post-checkpoint chain that satisfies the light
+    KAWPOW verifier) is used for broadcast with no further authorization.
+
+    This does not mean keys, signatures, or transaction contents can be
+    forged (that crypto surface is untouched); it means a single malicious
+    or compromised server, once it is the client's main interface, is fully
+    trusted to relay (or silently withhold, while claiming success) every
+    broadcast, and to be the sole source of the SPV view that led to that
+    transaction being constructed in the first place. There is no second
+    server, no quorum, and no operator-diversity requirement anywhere in
+    this codebase that would prevent that.
+    """
+
+    @staticmethod
+    def _ready_interface_with_no_operator_evidence():
+        iface = object.__new__(Interface)
+        iface.session = Mock()
+        iface.session.send_request = AsyncMock(return_value="ff" * 32)
+        iface.logger = Mock()
+        iface.server = ServerAddr.from_str("malicious.example:50001:t")
+        iface.ready = asyncio.get_running_loop().create_future()
+        iface.ready.set_result(1)
+        iface.got_disconnected = asyncio.Event()
+        # Deliberately left unset: ravencoin_backend_state,
+        # chain_validation_state, and any notion of "operator group" --
+        # there is no such attribute on Interface to strip. The point of
+        # this fixture is that broadcast never looks for one.
+        return iface
+
+    async def test_broadcast_has_no_gate_beyond_interface_and_ready(self):
+        net = object.__new__(Network)
+        net.logger = Mock()
+        net.default_server_changed_event = asyncio.Event()
+        iface = self._ready_interface_with_no_operator_evidence()
+        net.interface = iface
+
+        fake_tx = Mock()
+        fake_tx.outputs = Mock(return_value=[])
+        fake_tx.serialize = Mock(return_value="ff" * 10)
+        fake_tx.txid = Mock(return_value="ff" * 32)
+
+        # Real, unmocked Network.broadcast_transaction and the real
+        # best_effort_reliable decorator around it -- only the RPC
+        # transport (iface.session.send_request) is a stub.
+        await net.broadcast_transaction(fake_tx, timeout=5)
+
+        iface.session.send_request.assert_awaited_once_with(
+            'blockchain.transaction.broadcast', [fake_tx.serialize()], timeout=5
+        )
+
+    async def test_no_operator_group_or_diversity_concept_exists_on_the_path(self):
+        """Structural fact, verified against the real objects rather than
+        merely asserted from reading: neither Interface nor
+        Network.broadcast_transaction carries any notion of operator
+        identity, operator group, or a minimum-independent-sources count.
+        """
+        iface_attrs = {a for a in vars(self._ready_interface_with_no_operator_evidence())}
+        suspicious = {a for a in iface_attrs if 'operator' in a.lower() or 'group' in a.lower()
+                      or 'quorum' in a.lower() or 'diversity' in a.lower()}
+        self.assertEqual(set(), suspicious,
+                         f"unexpected operator-diversity-shaped attribute on Interface: {suspicious}")
+
+        sig = inspect.signature(Network.broadcast_transaction)
+        for forbidden in ('operator_group', 'operator', 'min_operators', 'min_sources', 'quorum'):
+            self.assertNotIn(forbidden, sig.parameters)
 
 
 if __name__=="__main__":

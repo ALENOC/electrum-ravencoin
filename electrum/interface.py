@@ -575,12 +575,18 @@ class Interface(Logger):
                 self.logger.info(f'disconnecting due to: {repr(e)}')
             return
 
-    def _mark_ready(self) -> None:
-        if self.ready.cancelled():
-            raise GracefulDisconnect('conn establishment was too slow; *ready* future was cancelled')
-        if self.ready.done():
+    def _initialize_blockchain_state(self) -> None:
+        """Select the local Blockchain object this interface's reported tip
+        belongs to. This is plain local-state initialization (which fork, if
+        any, the server's tip attaches to) and carries no security meaning by
+        itself -- it must run before _process_header_at_tip() (which
+        dereferences self.blockchain), but must NOT be conflated with
+        _mark_ready(), which gates trust/readiness and must stay after chain
+        validation. Idempotent: only the first call (per interface) selects a
+        chain; later header processing evolves self.blockchain via step().
+        """
+        if self.blockchain is not None:
             return
-
         assert self.tip_header
         chain = blockchain.check_header(self.tip_header)
         if not chain:
@@ -588,9 +594,15 @@ class Interface(Logger):
         else:
             self.blockchain = chain
         assert self.blockchain is not None
-
         self.logger.info(f"set blockchain with height {self.blockchain.height()}")
 
+    def _mark_ready(self) -> None:
+        if self.ready.cancelled():
+            raise GracefulDisconnect('conn establishment was too slow; *ready* future was cancelled')
+        if self.ready.done():
+            return
+
+        assert self.blockchain is not None
         self.ready.set_result(1)
 
     def is_connected_and_ready(self) -> bool:
@@ -688,10 +700,19 @@ class Interface(Logger):
         assert_non_negative_integer(res['count'])
         assert_non_negative_integer(res['max'])
         assert_hex_str(res['hex'])
-        if height + size >= constants.net.KawpowActivationHeight and len(res['hex']) != HEADER_SIZE * 2 * res['count']:
+        # A chunk can straddle the KAWPOW activation height: heights below it
+        # are legacy 80-byte headers, heights at/above it are 120-byte kawpow
+        # headers, and a single requested chunk can contain both. Comparing
+        # only the chunk's end height against the activation height (as if
+        # every header in the chunk had the same size) rejects such a
+        # straddling chunk outright, even though the response is correct and
+        # verify_chunk/save_chunk already parse each header at its own size.
+        activation_height = constants.net.KawpowActivationHeight
+        legacy_count = max(0, min(height + size, activation_height) - height)
+        kawpow_count = size - legacy_count
+        expected_hex_len = 2 * (legacy_count * LEGACY_HEADER_SIZE + kawpow_count * HEADER_SIZE)
+        if len(res['hex']) != expected_hex_len:
             raise RequestCorrupted('inconsistent chunk hex and count')
-        if height + size < constants.net.KawpowActivationHeight and len(res['hex']) != LEGACY_HEADER_SIZE * 2 * res['count']:
-            raise RequestCorrupted('inconsistent chunk hex and count (legacy)')
         # we never request more than 2016 headers, but we enforce those fit in a single response
         if res['max'] < 2016:
             raise RequestCorrupted(f"server uses too low 'max' count for block.headers: {res['max']} < 2016")
@@ -892,6 +913,7 @@ class Interface(Logger):
 
     async def _validate_tip_and_mark_ready(self) -> bool:
         """Keep an interface out of the usable pool until its chain is verified."""
+        self._initialize_blockchain_state()
         try:
             blockchain_updated = await self._process_header_at_tip()
         except Exception:
