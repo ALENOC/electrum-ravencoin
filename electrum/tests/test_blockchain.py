@@ -458,3 +458,80 @@ class TestVerifyHeader(ElectrumTestCase):
         with self.assertRaises(InvalidHeader):
             self.header["nonce"] = 42
             Blockchain.verify_header(self.header, self.prev_hash, self.target)
+
+
+class TestKawpowNHeightValidation(ElectrumTestCase):
+    """F3: a KAWPOW-era header's declared nheight must match its real chain
+    position. Core treats a mismatch as consensus-invalid; the wallet's own
+    light KAWPOW verification does not otherwise catch a forged value, since
+    it trusts the header's own mix hash rather than recomputing it.
+    """
+
+    prev_hash = "00" * 32
+    # A target large enough that any 256-bit hash satisfies the PoW check,
+    # so these tests exercise only the nheight rule, not KAWPOW difficulty.
+    _any_hash_target = (1 << 256) - 1
+
+    @classmethod
+    def _kawpow_header(cls, *, block_height, nheight):
+        return {
+            "version": 0x20000000,
+            "prev_block_hash": cls.prev_hash,
+            "merkle_root": "11" * 32,
+            "timestamp": constants.net.KawpowActivationTS + 10_000_000,
+            "bits": Blockchain.target_to_bits(cls._any_hash_target),
+            "nheight": nheight,
+            "nonce": 0,
+            "mix_hash": "22" * 32,
+            "block_height": block_height,
+        }
+
+    def _assert_accepted(self, *, block_height, nheight):
+        header = self._kawpow_header(block_height=block_height, nheight=nheight)
+        Blockchain.verify_header(header, self.prev_hash, self._any_hash_target)
+
+    def _assert_rejected(self, *, block_height, nheight):
+        header = self._kawpow_header(block_height=block_height, nheight=nheight)
+        with self.assertRaises(InvalidHeader):
+            Blockchain.verify_header(header, self.prev_hash, self._any_hash_target)
+
+    def test_matching_nheight_is_accepted(self):
+        height = constants.net.KawpowActivationHeight + 5
+        self._assert_accepted(block_height=height, nheight=height)
+
+    def test_forged_nheight_above_is_rejected(self):
+        height = constants.net.KawpowActivationHeight + 5
+        self._assert_rejected(block_height=height, nheight=height + 1)
+
+    def test_forged_nheight_below_is_rejected(self):
+        height = constants.net.KawpowActivationHeight + 5
+        self._assert_rejected(block_height=height, nheight=height - 1)
+
+    def test_august_2026_boundary_heights_pass_with_correct_nheight(self):
+        # The incident boundary itself: honest headers must not be rejected.
+        for height in (4487775, 4487776, 4487777):
+            self._assert_accepted(block_height=height, nheight=height)
+
+    def test_august_2026_boundary_forged_header_is_rejected(self):
+        # The exact incident shape: a header claiming the boundary height
+        # while actually sitting at a different chain position.
+        self._assert_rejected(block_height=4487776, nheight=4487775)
+
+    def test_later_header_with_wrong_nheight_is_rejected(self):
+        self._assert_rejected(block_height=4600000, nheight=4599999)
+
+    def test_pre_kawpow_headers_carry_no_nheight_field(self):
+        # Legacy (pre-KAWPOW) headers never have the field at all; the check
+        # must not require or invent one for them.
+        legacy = deserialize_header(
+            bfh(TestVerifyHeader.valid_header), 100)
+        self.assertNotIn("nheight", legacy)
+
+    def test_ambiguous_pre_activation_height_is_not_enforced(self):
+        # A header below KawpowActivationHeight that nonetheless carries an
+        # 'nheight' key (only possible via an inconsistent/edge parse, since
+        # deserialize_header keys off the header's own timestamp rather than
+        # the caller-supplied height) is left to the rest of validation
+        # instead of being rejected on an ambiguous field.
+        height = constants.net.KawpowActivationHeight - 1
+        self._assert_accepted(block_height=height, nheight=height + 1)
