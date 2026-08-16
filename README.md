@@ -79,15 +79,23 @@ server reachable
   -> backend evidence present and fresh
   -> exact repository + commit is policy-certified
   -> network/sync/checkpoint flags pass
-  -> independent chain validation passes
-  -> SAFE_CORE_VERIFIED
+  -> SAFE_CORE_VERIFIED (backend release claim accepted)
+  -> independent chain validation passes (headers, checkpoint, nHeight)
+  -> verified safe for use
 ```
 
-An unknown commit, wrong repository, future release such as 4.9.0, stale or
-malformed evidence, wrong network, chain conflict or failed checkpoint causes a
-fail-closed rejection. If policy distribution is unavailable, the wallet uses
-the last verified cache or built-in baseline; it never accepts an unknown newer
-Core as a fallback.
+`SAFE_CORE_VERIFIED` describes the backend's self-reported identity claim
+against the signed policy; it is not remote-binary attestation, and by itself
+it does not make a server usable. Chain validation is the independent leg,
+and only a server that passes both is ever used. An unknown commit, wrong
+repository, future release such as 4.9.0, stale or malformed evidence, wrong
+network, chain conflict or failed checkpoint causes a fail-closed rejection at
+whichever step it is caught.
+
+This build's effective policy is always the baseline compiled into the
+wallet; there is no runtime fetch of a remote policy yet, so a revocation
+reaches users through a wallet update rather than a network channel. The
+wallet never accepts an unknown newer Core as a fallback either way.
 
 The current release certification is complete, but live deployment validation is
 still in progress. A certified software identity does not cryptographically

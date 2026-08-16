@@ -34,6 +34,10 @@ entry alone cannot override a chain conflict.
 
 ## Policy availability
 
-The static policy artifact is distributed over HTTPS and verified locally. If it
-is unavailable, the client keeps its last verified policy or baseline. It does
-not call a GitHub API at connection time and does not lower the acceptance bar.
+The effective policy today is always the baseline compiled into the wallet
+build (`core_safety_baseline.json`). Signed-policy verification, local caching
+and anti-rollback state exist in the client and are covered by tests, so a
+future wallet update can ship a signed policy through them, but this build
+does not fetch a policy over the network. A revocation reaches users only
+through a wallet update, not a remote channel, until a fetcher is wired up and
+shipped.

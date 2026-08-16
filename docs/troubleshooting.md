@@ -26,7 +26,10 @@ flags/checkpoint evidence, or serving history that fails independent validation.
 The operator must repair and revalidate the server; the wallet should not lower
 its policy.
 
-## Policy service unavailable
+## Policy looks out of date
 
-The last verified cache or built-in baseline remains active. Check local cache
-permissions and HTTPS access, but never replace the policy with unsigned JSON.
+This build has no remote policy fetcher: the effective policy is the baseline
+compiled into the wallet, and a revocation reaches users through a wallet
+update. If you expected a specific release to already be certified or revoked,
+check the wallet version rather than local cache or network state, and never
+replace the policy file with unsigned JSON.
