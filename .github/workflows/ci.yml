@@ -44,15 +44,45 @@ jobs:
           python -m pip install -e ".[tests]"
           python -m pip install pytest==8.3.5
 
-      - name: Focused safety and backend contract tests
+      - name: Supported Ravencoin client test suite
         run: |
           set -euo pipefail
+          # Release-gating surface: functionality this Ravencoin fork ships
+          # and supports. Everything below must pass for a release.
           python -m pytest -q \
             electrum/tests/test_core_safety_policy.py \
             electrum/tests/test_core_safety_directory.py \
             electrum/tests/test_ravencoin_backend.py \
             electrum/tests/test_interface.py \
-            electrum/tests/test_blockchain.py::TestKawpowNHeightValidation
+            electrum/tests/test_blockchain.py \
+            electrum/tests/test_network.py \
+            electrum/tests/test_verifier.py \
+            electrum/tests/test_write_authorization.py \
+            electrum/tests/test_recent_agreement_relay.py \
+            electrum/tests/test_ipfs_db.py \
+            electrum/tests/test_wizard_2fa.py \
+            electrum/tests/test_transaction.py \
+            electrum/tests/test_bitcoin.py \
+            electrum/tests/test_util.py \
+            electrum/tests/test_psbt.py \
+            electrum/tests/test_coinchooser.py \
+            electrum/tests/test_x509.py \
+            electrum/tests/test_revealer.py \
+            --deselect electrum/tests/test_util.py::TestUtil::test_parse_URI_lightning_consistency
+
+          # Not gated -- inherited upstream debt for features this fork does
+          # not support. This is an explicit scope decision, not hidden red:
+          #   Lightning/BOLT (UI disabled, channel funding stubbed):
+          #     test_lnpeer test_lnchannel test_lntransport test_lnutil
+          #     test_bolt11 test_lnmsg test_sswaps test_lnrouter
+          #     + test_parse_URI_lightning_consistency (deselected above)
+          #   TrustedCoin (plugin removed from this fork):
+          #     test_commands test_mnemonic test_wallet_vertical
+          #   Bitcoin-era fixtures / API drift never ported:
+          #     test_storage_upgrade (fixture corpus never shipped here)
+          #     test_wallet test_daemon test_invoices test_descriptor
+          #     test_simple_config
+          # These remain tracked as port-or-remove debt.
 
       - name: Compile checks
         run: python -m compileall -q electrum
