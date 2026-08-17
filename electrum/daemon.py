@@ -596,7 +596,8 @@ class Daemon(Logger):
                         await group.spawn(self.network.stop(full_shutdown=True))
                     await group.spawn(self.taskgroup.cancel_remaining())
             self.logger.info('saving IPFS metadata')
-            IPFSDB.get_instance().write()
+            if IPFSDB.is_initialized():
+                IPFSDB.get_instance().write()
             if self._plugins:
                 self.logger.info("stopping plugins")
                 self._plugins.stop()

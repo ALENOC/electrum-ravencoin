@@ -120,10 +120,17 @@ class IPFSDBReadWriteError(Exception):
 
 class IPFSDB(JsonDB, EventListener):
     def __new__(cls, *args, **kwargs):
-        if not hasattr(cls, "instance"):
+        if not hasattr(cls, "_instance"):
             cls._instance = super().__new__(cls)
             cls._instance.__init__(*args, **kwargs)
         return cls._instance
+
+    @classmethod
+    def is_initialized(cls) -> bool:
+        """Whether IPFSDB.initialize() has run in this process. Daemon.stop()
+        must not touch the instance otherwise: only the Qt GUI initializes
+        it, so headless daemons would crash on shutdown."""
+        return hasattr(cls, "_instance")
 
     @classmethod
     def initialize(cls, path: str, raw_path: str):

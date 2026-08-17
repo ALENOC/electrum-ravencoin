@@ -46,6 +46,11 @@ class ElectrumTestCase(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self._test_lock.acquire()
+        # addCleanup (not tearDown) releases the lock: unittest skips
+        # tearDown entirely when setUp fails, and an exception in
+        # asyncTearDown used to skip it too -- either leaked the global
+        # lock and hung every later test in the process.
+        self.addCleanup(self._test_lock.release)
         super().setUp()
         self.electrum_path = tempfile.mkdtemp()
         assert util._asyncio_event_loop is None, "global event loop already set?!"
@@ -62,7 +67,6 @@ class ElectrumTestCase(unittest.IsolatedAsyncioTestCase):
         shutil.rmtree(self.electrum_path)
         super().tearDown()
         util._asyncio_event_loop = None  # cleared here, at the ~last possible moment. asyncTearDown is too early.
-        self._test_lock.release()
 
 
 def as_testnet(func):
