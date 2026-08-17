@@ -1004,8 +1004,6 @@ class SimpleConfig(Logger):
     PAYSERVER_ROOT = ConfigVar('payserver_root', default='/r', type_=str)
     PAYSERVER_ALLOW_CREATE_INVOICE = ConfigVar('payserver_allow_create_invoice', default=False, type_=bool)
 
-    PLUGIN_TRUSTEDCOIN_NUM_PREPAY = ConfigVar('trustedcoin_prepay', default=20, type_=int)
-
     DOWNLOAD_IPFS = ConfigVar('download_ipfs_preview', default=False, type_=bool)
     MAX_IPFS_DOWNLOAD_SIZE = ConfigVar('download_ipfs_max_size', default=10_000_000, type_=int)
     MAX_IPFS_DOWNLOAD_WAIT = ConfigVar('download_ipfs_timeout_sec', default=60, type_=int)

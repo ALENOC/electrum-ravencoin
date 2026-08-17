@@ -144,7 +144,6 @@ class BaseWizard(Logger):
         ])
         wallet_kinds = [
             ('standard',  _("Standard wallet")),
-            #('2fa', _("Wallet with two-factor authentication")),
             ('multisig',  _("Multi-signature wallet")),
             ('imported',  _("Import Bitcoin addresses or private keys")),
         ]
@@ -173,20 +172,12 @@ class BaseWizard(Logger):
         """
         raise NotImplementedError()
 
-    def load_2fa(self):
-        self.data['wallet_type'] = '2fa'
-        self.data['use_trustedcoin'] = True
-        self.plugin = self.plugins.load_plugin('trustedcoin')
-
     def on_wallet_type(self, choice):
         self.data['wallet_type'] = self.wallet_type = choice
         if choice == 'standard':
             action = 'choose_keystore'
         elif choice == 'multisig':
             action = 'choose_multisig'
-        elif choice == '2fa':
-            self.load_2fa()
-            action = self.plugin.get_action(self.data)
         elif choice == 'imported':
             action = 'import_addresses_or_keys'
         self.run(action)
@@ -530,8 +521,12 @@ class BaseWizard(Logger):
         elif self.seed_type == 'old':
             self.run('create_keystore', seed, '', False)
         elif mnemonic.is_any_2fa_seed_type(self.seed_type):
-            self.load_2fa()
-            self.run('on_restore_seed', seed, is_ext)
+            # TrustedCoin 2FA was never a Ravencoin feature; the plugin was
+            # removed from this fork, so a 2FA seed must be rejected with a
+            # clear message instead of crashing on the missing plugin.
+            raise Exception(
+                _('2FA (TrustedCoin) seeds are not supported by this Ravencoin client. '
+                  'The TrustedCoin plugin was removed from this fork.'))
         else:
             raise Exception('Unknown seed type', self.seed_type)
 

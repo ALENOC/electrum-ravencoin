@@ -9,7 +9,6 @@ from electrum.wallet_db import WalletDB
 from electrum.bip32 import normalize_bip32_derivation, xpub_type
 from electrum import keystore
 from electrum import bitcoin
-from electrum.mnemonic import is_any_2fa_seed_type
 
 
 class WizardViewState(NamedTuple):
@@ -248,7 +247,6 @@ class NewWalletWizard(AbstractWizard):
         t = wizard_data['wallet_type']
         return {
             'standard': 'keystore_type',
-            '2fa': 'trustedcoin_start',
             'multisig': 'multisig',
             'imported': 'imported'
         }.get(t)
@@ -363,7 +361,7 @@ class NewWalletWizard(AbstractWizard):
         # override
 
     def create_storage(self, path, data):
-        assert data['wallet_type'] in ['standard', '2fa', 'imported', 'multisig']
+        assert data['wallet_type'] in ['standard', 'imported', 'multisig']
 
         if os.path.exists(path):
             raise Exception('file already exists at path')
@@ -398,9 +396,6 @@ class NewWalletWizard(AbstractWizard):
                 else:
                     script = data['script_type'] if data['script_type'] != 'p2pkh' else 'standard'
                 k = keystore.from_bip43_rootseed(root_seed, derivation, xtype=script)
-            elif is_any_2fa_seed_type(data['seed_type']):
-                self._logger.debug('creating keystore from 2fa seed')
-                k = keystore.from_xprv(data['x1/']['xprv'])
             else:
                 raise Exception('unsupported/unknown seed_type %s' % data['seed_type'])
         elif data['keystore_type'] == 'masterkey':
@@ -434,17 +429,6 @@ class NewWalletWizard(AbstractWizard):
 
         if data['wallet_type'] == 'standard':
             db.put('keystore', k.dump())
-        elif data['wallet_type'] == '2fa':
-            db.put('x1/', k.dump())
-            if data['trustedcoin_keepordisable'] == 'disable':
-                k2 = keystore.from_xprv(data['x2/']['xprv'])
-                if data['encrypt'] and k2.may_have_password():
-                    k2.update_password(None, data['password'])
-                db.put('x2/', k2.dump())
-            else:
-                db.put('x2/', data['x2/'])
-            db.put('x3/', data['x3/'])
-            db.put('use_trustedcoin', True)
         elif data['wallet_type'] == 'multisig':
             if not isinstance(k, keystore.Xpub):
                 raise Exception(f"unexpected keystore(main) type={type(k)} in multisig. not bip32.")
