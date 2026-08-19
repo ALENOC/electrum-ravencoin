@@ -227,16 +227,19 @@ class TestVerifiedReadAuthorization(unittest.TestCase):
             constants.net.DEFAULT_SERVERS = old_servers
 
 
-class TestProductionOperatorDiversity(unittest.TestCase):
-    def test_shipped_directory_has_two_operator_groups(self):
+class TestProductionOperatorAnchors(unittest.TestCase):
+    def test_shipped_directory_has_only_raventag_as_trusted_operator(self):
         groups = {
             entry.get("operatorGroup")
             for entry in constants.net.DEFAULT_SERVERS.values()
             if isinstance(entry, dict) and entry.get("operatorGroup")
         }
-        self.assertIn("rvn4lyfe", groups)
-        self.assertIn("ALENOC", groups)
-        self.assertGreaterEqual(len(groups), 2)
+        self.assertEqual({"ALENOC"}, groups)
+        self.assertEqual(
+            "ALENOC",
+            constants.net.DEFAULT_SERVERS["electrumx.raventag.com"]["operatorGroup"],
+        )
+        self.assertNotIn("operatorGroup", constants.net.DEFAULT_SERVERS["rvn4lyfe.com"])
 
 
 if __name__ == "__main__":
