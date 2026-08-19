@@ -206,6 +206,14 @@ python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: 
     -Ir ./contrib/deterministic-build/requirements.txt ||
     fail "Could not install requirements"
 
+# pip 24.1+ rejects the legacy metadata emitted by btchip-python 0.1.32.
+# Restore the already-audited, hash-pinned build pip only for the legacy
+# hardware-wallet dependency phase; do not change the wallet dependency itself.
+info "Restoring legacy-compatible pip for hardware wallet requirements..."
+python3 -m pip install --no-dependencies --require-hashes --no-warn-script-location \
+    -r ./contrib/deterministic-build/requirements-pip-legacy.txt ||
+    fail "Could not restore legacy-compatible pip"
+
 info "Installing hardware wallet requirements..."
 python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: --only-binary cryptography \
     --no-warn-script-location \
