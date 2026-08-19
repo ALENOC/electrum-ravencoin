@@ -34,7 +34,9 @@ jobs:
       - name: Install native crypto dependency
         run: |
           set -euo pipefail
-          sudo apt-get update
+          # ubuntu-24.04 hosted runners already have a current package index;
+          # avoiding an unconditional refresh removes a flaky external-mirror
+          # dependency from every release-gating run.
           sudo apt-get install --no-install-recommends -y libsecp256k1-1
 
       - name: Install test dependencies
@@ -55,6 +57,7 @@ jobs:
             electrum/tests/test_ravencoin_backend.py \
             electrum/tests/test_interface.py \
             electrum/tests/test_blockchain.py \
+            electrum/tests/test_security_remediation.py \
             electrum/tests/test_network.py \
             electrum/tests/test_verifier.py \
             electrum/tests/test_write_authorization.py \

@@ -4,9 +4,11 @@
 
 """Fail-closed eligibility policy for Ravencoin Electrum server backends.
 
-``server.version`` identifies ElectrumX.  Only ``server.ravencoin_backend``
-identifies the Ravencoin Core daemon, and that self-report remains a prerequisite
-rather than a replacement for SPV/header validation.
+``server.version`` identifies ElectrumX. ``server.ravencoin_backend`` is
+an *untrusted capability claim* made by that same remote server. Its fields are
+validated against the signed release policy, but this is not cryptographic
+attestation of the process or binary actually serving the request. The claim is
+only a prerequisite; independent chain validation remains authoritative.
 """
 
 from dataclasses import dataclass
@@ -25,7 +27,8 @@ _SUBVERSION_RE = re.compile(r"^/Ravencoin:([0-9]+(?:\.[0-9]+){2,3})/$")
 
 
 class BackendEligibilityState(str, Enum):
-    SAFE_CORE_VERIFIED = "SAFE_CORE_VERIFIED"
+    POLICY_CONFORMING_BACKEND_CLAIM = "SAFE_CORE_VERIFIED"
+    SAFE_CORE_VERIFIED = "SAFE_CORE_VERIFIED"  # deprecated compatibility alias
     CORE_TOO_OLD = "CORE_TOO_OLD"
     CORE_VERSION_UNKNOWN = "CORE_VERSION_UNKNOWN"
     BACKEND_METHOD_UNAVAILABLE = "BACKEND_METHOD_UNAVAILABLE"
@@ -103,7 +106,7 @@ class RavencoinBackendEvidence:
     @property
     def server_reports_compatible_backend(self) -> bool:
         """Compatibility claim only; chain validation is still required."""
-        return classify_backend_evidence(self) == BackendEligibilityState.SAFE_CORE_VERIFIED
+        return classify_backend_evidence(self) == BackendEligibilityState.POLICY_CONFORMING_BACKEND_CLAIM
 
 
 def _integer(value: Any, field: str, *, minimum: int = 0) -> int:
@@ -392,7 +395,7 @@ def classify_release_identity(
         # The certified identity exists but the running daemon reports a different
         # version than what was certified at that commit.
         return BackendEligibilityState.CORE_IDENTITY_CONFLICT
-    return BackendEligibilityState.SAFE_CORE_VERIFIED
+    return BackendEligibilityState.POLICY_CONFORMING_BACKEND_CLAIM
 
 
 def backend_rejection_message(

@@ -28,7 +28,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Dict, Optional, Set, Tuple, NamedTuple, Sequence, List, Mapping, Union
 
 from .crypto import sha256
-from . import bitcoin, util
+from . import bitcoin, util, constants
 from .bitcoin import COINBASE_MATURITY
 from .util import profiler, bfh, TxMinedInfo, UnrelatedTransactionException, with_lock, OldTaskGroup
 from .transaction import Transaction, TxOutput, TxInput, PartialTxInput, TxOutpoint
@@ -59,6 +59,8 @@ METADATA_UNVERIFIED = -1
 
 TX_TIMESTAMP_INF = 999_999_999_999
 TX_HEIGHT_INF = 10 ** 9
+
+VERIFIED_READ_QUORUM_MIGRATION_KEY = "rvn_verified_read_quorum_v1"
 
 
 class HistoryItem(NamedTuple):
@@ -254,6 +256,13 @@ class AddressSynchronizer(Logger, EventListener):
         assert self.network is None, "already started"
         self.network = network
         if self.network is not None:
+            if not self.db.get(VERIFIED_READ_QUORUM_MIGRATION_KEY, False):
+                self.undo_verifications(
+                    self.network.blockchain(),
+                    constants.net.max_checkpoint(),
+                    force=True,
+                )
+                self.db.put(VERIFIED_READ_QUORUM_MIGRATION_KEY, True)
             self.synchronizer = Synchronizer(self)
             self.verifier = SPV(self.network, self)
             self.asyncio_loop = network.asyncio_loop
@@ -1128,12 +1137,6 @@ class AddressSynchronizer(Logger, EventListener):
             #unconfirmed_tags = self.unconfirmed_tags_for_qualifier.get(asset)
             #if unconfirmed_tags and h160 in unconfirmed_tags:
             #    return unconfirmed_tags[h160]['flag']
-            unverified_tags = self.unverified_tags_for_h160.get(h160)
-            if unverified_tags and asset in unverified_tags:
-                return unverified_tags[asset]['flag']
-            unverified_tags = self.unverified_tags_for_qualifier.get(asset)
-            if unverified_tags and h160 in unverified_tags:
-                return unverified_tags[h160]['flag']
             tag = self.db.get_verified_h160_tag(h160, asset)
             if tag:
                 return tag['flag']
@@ -1272,6 +1275,9 @@ class AddressSynchronizer(Logger, EventListener):
         with self.lock:
             self.unverified_tx.pop(tx_hash, None)
             self.db.add_verified_tx(tx_hash, info)
+            self._get_balance_cache.clear()
+            self._get_asset_balance_cache.clear()
+            self._get_assets_in_mempool_cache.clear()
         util.trigger_callback('adb_added_verified_tx', self, tx_hash)
 
     def get_unverified_txs(self) -> Dict[str, int]:
@@ -1279,8 +1285,8 @@ class AddressSynchronizer(Logger, EventListener):
         with self.lock:
             return dict(self.unverified_tx)  # copy
 
-    def undo_verifications(self, blockchain: Blockchain, above_height: int) -> Set[str]:
-        '''Used by the verifier when a reorg has happened'''
+    def undo_verifications(self, blockchain: Blockchain, above_height: int, *, force: bool = False) -> Set[str]:
+        '''Used for reorgs and one-time security revalidation.'''
         txs = set()
         assets = set()
         with self.lock:
@@ -1288,7 +1294,7 @@ class AddressSynchronizer(Logger, EventListener):
                 base_outpoint, base_height = self.db.get_verified_asset_metadata_base_source(asset)
                 verified_info = self.db.get_verified_tx(base_outpoint.txid.hex())
                 header = blockchain.read_header(base_height)
-                if header and verified_info and hash_header(header) == verified_info.header_hash: continue
+                if not force and header and verified_info and hash_header(header) == verified_info.header_hash: continue
                 assets.add(asset)
                 tup = self.db.remove_verified_asset_metadata(asset)
                 self.unverified_asset_metadata[asset] = tup
@@ -1302,7 +1308,7 @@ class AddressSynchronizer(Logger, EventListener):
                 data = self.db.get_verified_restricted_verifier(asset)
                 verified_info = self.db.get_verified_tx(data['tx_hash'])
                 header = blockchain.read_header(data['height'])
-                if header and verified_info and hash_header(header) == verified_info.header_hash: continue
+                if not force and header and verified_info and hash_header(header) == verified_info.header_hash: continue
                 
                 self.db.remove_verified_restricted_verifier(asset)
                 txs.add(data['tx_hash'])
@@ -1310,7 +1316,7 @@ class AddressSynchronizer(Logger, EventListener):
                 data = self.db.get_verified_restricted_freeze(asset)
                 verified_info = self.db.get_verified_tx(data['tx_hash'])
                 header = blockchain.read_header(data['height'])
-                if header and verified_info and hash_header(header) == verified_info.header_hash: continue
+                if not force and header and verified_info and hash_header(header) == verified_info.header_hash: continue
                 
                 self.db.remove_verified_restricted_freeze(asset)
                 txs.add(data['tx_hash'])
@@ -1320,17 +1326,17 @@ class AddressSynchronizer(Logger, EventListener):
                     verified_info = self.db.get_verified_tx(association_data['tx_hash'])
                     
                     header = blockchain.read_header(association_data['height'])
-                    if header and verified_info and hash_header(header) == verified_info.header_hash: continue
+                    if not force and header and verified_info and hash_header(header) == verified_info.header_hash: continue
                     
                     self.db.remove_verified_association(asset, restricted_asset)
-                    txs.add(tag_data['tx_hash'])
+                    txs.add(association_data['tx_hash'])
             
             for asset, h160s in self.db.get_verified_qualifier_tags_after_height(above_height).items():
                 for h160 in h160s:
                     tag_data = self.db.get_verified_qualifier_tag(asset, h160)
                     verified_info = self.db.get_verified_tx(tag_data['tx_hash'])
                     header = blockchain.read_header(tag_data['height'])
-                    if header and verified_info and hash_header(header) == verified_info.header_hash: continue
+                    if not force and header and verified_info and hash_header(header) == verified_info.header_hash: continue
                     
                     self.db.remove_verified_qualifier_tag(asset, h160)
                     txs.add(tag_data['tx_hash'])
@@ -1339,7 +1345,7 @@ class AddressSynchronizer(Logger, EventListener):
                     tag_data = self.db.get_verified_h160_tag(h160, asset)
                     verified_info = self.db.get_verified_tx(tag_data['tx_hash'])
                     header = blockchain.read_header(tag_data['height'])
-                    if header and verified_info and hash_header(header) == verified_info.header_hash: continue
+                    if not force and header and verified_info and hash_header(header) == verified_info.header_hash: continue
                     
                     self.db.remove_verified_h160_tag(h160, asset)
                     txs.add(tag_data['tx_hash'])
@@ -1348,7 +1354,7 @@ class AddressSynchronizer(Logger, EventListener):
                     broadcast = self.db.get_verified_broadcast(asset, tx_hash)
                     verified_info = self.db.get_verified_tx(tx_hash)
                     header = blockchain.read_header(broadcast['height'])
-                    if header and verified_info and hash_header(header) == verified_info.header_hash: continue
+                    if not force and header and verified_info and hash_header(header) == verified_info.header_hash: continue
 
                     self.db.remove_verified_broadcast(asset, tx_hash)
                     txs.add(tx_hash)
@@ -1357,7 +1363,7 @@ class AddressSynchronizer(Logger, EventListener):
                 tx_height = info.height
                 if tx_height > above_height:
                     header = blockchain.read_header(tx_height)
-                    if not header or hash_header(header) != info.header_hash:
+                    if force or not header or hash_header(header) != info.header_hash:
                         self.db.remove_verified_tx(tx_hash)
                         # NOTE: we should add these txns to self.unverified_tx,
                         # but with what height?
@@ -1515,6 +1521,12 @@ class AddressSynchronizer(Logger, EventListener):
         self.db.add_num_inputs_to_tx(txid, len(tx.inputs()))
         return fee
 
+    def _is_tx_spv_verified_at_height(self, txid: str, height: int) -> bool:
+        if type(height) is not int or height <= 0:
+            return False
+        info = self.db.get_verified_tx(txid)
+        return bool(info and info.height == height)
+
     def get_addr_io(self, address: str):
         with self.lock, self.transaction_lock:
             h = self.get_address_history(address).items()
@@ -1545,8 +1557,12 @@ class AddressSynchronizer(Logger, EventListener):
             utxo.block_txpos = tx_pos
             if prevout_str in sent:
                 txid, height, pos = sent[prevout_str]
-                utxo.spent_txid = txid
-                utxo.spent_height = height
+                if height > 0 and not self._is_tx_spv_verified_at_height(txid, height):
+                    utxo.spent_txid = None
+                    utxo.spent_height = None
+                else:
+                    utxo.spent_txid = txid
+                    utxo.spent_height = height
             else:
                 utxo.spent_txid = None
                 utxo.spent_height = None
@@ -1619,6 +1635,9 @@ class AddressSynchronizer(Logger, EventListener):
 
             v = utxo.value_sats(asset_aware=asset_aware)
             tx_height = utxo.block_height
+            txid = utxo.prevout.txid.hex()
+            if tx_height > 0 and not self._is_tx_spv_verified_at_height(txid, tx_height):
+                continue
             is_cb = utxo.is_coinbase_output()
             if is_cb and tx_height + COINBASE_MATURITY > mempool_height:
                 if asset_aware:
@@ -1645,7 +1664,9 @@ class AddressSynchronizer(Logger, EventListener):
                 for txin in tx.inputs():
                     if txin.prevout in coins:
                         coin = coins[txin.prevout]
-                        if coin.block_height > 0:
+                        if (coin.block_height > 0
+                                and self._is_tx_spv_verified_at_height(
+                                    coin.prevout.txid.hex(), coin.block_height)):
                             if asset_aware:
                                 confirmed_spent_amount[coin.asset] += coin.value_sats(asset_aware=asset_aware)
                             else:
@@ -1709,6 +1730,10 @@ class AddressSynchronizer(Logger, EventListener):
             txos = self.get_addr_outputs(addr)
             for txo in txos.values():
                 if txo.value_sats(asset_aware=True) == 0: continue
+                if (txo.block_height > 0
+                        and not self._is_tx_spv_verified_at_height(
+                            txo.prevout.txid.hex(), txo.block_height)):
+                    continue
                 if txo.spent_height is not None:
                     if not confirmed_spending_only:
                         continue

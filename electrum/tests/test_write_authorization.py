@@ -1,10 +1,10 @@
 """F2 write-authorization gate: independent-operator consensus for broadcast.
 
-interface.ready, SAFE_CORE_VERIFIED, and chain_validation_state == VERIFIED
-are each necessary but not sufficient to authorize a sensitive write. A
-single server -- however perfectly it claims those states -- is still one
-operator, and light KAWPOW verification means one operator alone can
-fabricate a post-checkpoint chain that satisfies them (server-policy F2).
+interface.ready, the policy-conforming backend claim, and
+chain_validation_state == VERIFIED are each necessary but not sufficient for
+trusted chain-dependent state. A single server is still one operator. The
+same independent recent-chain evidence now gates both broadcast and promotion
+of server-provided state to SPV-verified wallet state.
 These tests exercise the real, unmocked Network.get_write_authorization()
 and Network.broadcast_transaction() against fixture interfaces standing in
 for the adversarial scenarios from the F2 re-audit.

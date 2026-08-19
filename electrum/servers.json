@@ -1,18 +1,25 @@
 {
-    "rvn4lyfe.com": {
-      "pruning": "-",
-      "s": "50002",
-      "t": "50001",
-      "version": "1.11",
-      "backend_policy": "historical-unverified; live capability required",
-      "operatorGroup": "rvn4lyfe"
-    },
-    "aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion": {
-      "pruning": "-",
-      "s": "50002",
-      "t": "50001",
-      "version": "1.11",
-      "backend_policy": "historical-unverified; live capability required",
-      "operatorGroup": "rvn4lyfe"
-    }
+  "aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion": {
+    "backend_policy": "historical-unverified; live capability required",
+    "operatorGroup": "rvn4lyfe",
+    "pruning": "-",
+    "s": "50002",
+    "t": "50001",
+    "version": "1.11"
+  },
+  "electrumx.raventag.com": {
+    "backend_policy": "historical-unverified; live capability required",
+    "operatorGroup": "ALENOC",
+    "pruning": "-",
+    "s": "50002",
+    "version": "1.11"
+  },
+  "rvn4lyfe.com": {
+    "backend_policy": "historical-unverified; live capability required",
+    "operatorGroup": "rvn4lyfe",
+    "pruning": "-",
+    "s": "50002",
+    "t": "50001",
+    "version": "1.11"
+  }
 }
