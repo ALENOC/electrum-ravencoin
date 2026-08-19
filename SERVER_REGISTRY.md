@@ -23,11 +23,11 @@ When two or more trusted operator groups are available, the client compares thei
 
 This means a sole trusted operator is an explicit trust assumption: compromise of that operator can still deceive a lightweight client that is not a full Ravencoin consensus verifier. The signed registry makes it possible to add independent operators later without recompiling already-released clients.
 
-## Backend compatibility floors
+## Backend compatibility
 
-The current compatibility floor is Ravencoin Core **4.8.0 or later** and ElectrumX-RVN **1.13.0 or later**. These are live compatibility gates, not merely directory annotations. The ElectrumX version is compared semantically, so compatible later releases such as 1.14.x or 2.x are not pinned out merely because their version string changed.
+Ravencoin Core has a hard safety floor of **4.8.0 or later**. Being numerically newer than 4.8.0 is necessary but not sufficient: each new Core release identity must also be certified by the separately signed Core safety policy before the wallet treats it as eligible.
 
-Ravencoin Core deliberately has a stricter second gate: being numerically newer than 4.8.0 is necessary but not sufficient. Each new Core release identity must also be certified by the separately signed Core safety policy before the wallet treats it as eligible.
+The maintained RavenTag deployment currently uses **ElectrumX-RVN 1.13.x** as its known baseline. The client is intentionally not pinned to the exact `1.13.0` product-version string: later ElectrumX releases remain eligible when they negotiate the supported Electrum protocol and continue to provide the required Ravencoin backend capability contract. This avoids requiring a wallet rebuild merely because ElectrumX is upgraded to a compatible later release.
 
 ## Updating the registry
 
