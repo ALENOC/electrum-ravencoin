@@ -25,7 +25,7 @@ This means a sole trusted operator is an explicit trust assumption: compromise o
 
 ## Backend compatibility floors
 
-The current compatibility floor is Ravencoin Core **4.8.0 or later** and ElectrumX-RVN **1.13.0 or later**. The ElectrumX version is compared semantically, so compatible later releases such as 1.14.x or 2.x are not pinned out merely because their version string changed.
+The current compatibility floor is Ravencoin Core **4.8.0 or later** and ElectrumX-RVN **1.13.0 or later**. These are live compatibility gates, not merely directory annotations. The ElectrumX version is compared semantically, so compatible later releases such as 1.14.x or 2.x are not pinned out merely because their version string changed.
 
 Ravencoin Core deliberately has a stricter second gate: being numerically newer than 4.8.0 is necessary but not sufficient. Each new Core release identity must also be certified by the separately signed Core safety policy before the wallet treats it as eligible.
 
