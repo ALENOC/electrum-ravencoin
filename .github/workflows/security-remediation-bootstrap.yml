@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - security/audit-remediation-2026-08-19
+  pull_request:
+    branches:
+      - master
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: security-remediation-bootstrap
+  group: security-remediation-bootstrap-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
