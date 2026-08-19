@@ -78,7 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           ./contrib/build-linux/sdist/build.sh
-          test -f "dist/Electrum-${VERSION}.tar.gz"
+          test -f "dist/Electrum-Ravencoin-${VERSION}.tar.gz"
 
       - name: Upload source artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
