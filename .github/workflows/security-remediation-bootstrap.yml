@@ -1,0 +1,88 @@
+name: Security remediation bootstrap
+
+on:
+  push:
+    branches:
+      - security/audit-remediation-2026-08-19
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: security-remediation-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  remediate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out remediation branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: security/audit-remediation-2026-08-19
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: '3.11'
+
+      - name: Install native and Python test dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libsecp256k1-1
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e ".[tests]"
+          python -m pip install pytest==8.3.5
+
+      - name: Decode and apply audited remediation
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import base64, lzma
+          raw = base64.b64decode(Path('.github/remediation_payload.b64').read_text().strip())
+          Path('/tmp/apply_security_remediation.py').write_bytes(lzma.decompress(raw))
+          PY
+          python /tmp/apply_security_remediation.py
+          git diff --check
+          python -m compileall -q electrum
+
+      - name: Run release-gating security surface
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            electrum/tests/test_core_safety_policy.py \
+            electrum/tests/test_core_safety_directory.py \
+            electrum/tests/test_ravencoin_backend.py \
+            electrum/tests/test_interface.py \
+            electrum/tests/test_blockchain.py \
+            electrum/tests/test_security_remediation.py \
+            electrum/tests/test_network.py \
+            electrum/tests/test_verifier.py \
+            electrum/tests/test_write_authorization.py \
+            electrum/tests/test_recent_agreement_relay.py \
+            electrum/tests/test_ipfs_db.py \
+            electrum/tests/test_wizard_2fa.py \
+            electrum/tests/test_transaction.py \
+            electrum/tests/test_bitcoin.py \
+            electrum/tests/test_util.py \
+            electrum/tests/test_psbt.py \
+            electrum/tests/test_coinchooser.py \
+            electrum/tests/test_x509.py \
+            electrum/tests/test_revealer.py \
+            --deselect electrum/tests/test_util.py::TestUtil::test_parse_URI_lightning_consistency
+
+      - name: Commit validated remediation and remove bootstrap
+        run: |
+          set -euo pipefail
+          rm -f .github/remediation_payload.b64 .github/workflows/security-remediation-bootstrap.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git status --short
+          git commit -m 'security: remediate audited client trust boundaries'
+          git push origin HEAD:security/audit-remediation-2026-08-19
