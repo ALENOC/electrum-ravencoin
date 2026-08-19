@@ -55,11 +55,15 @@ info "Building $pkgname..."
                 --with-directshow=yes \
                 --disable-dependency-tracking"
         elif [ $(uname) == "Darwin" ]; then
-            # macos target
+            # macos target. Electrum only needs the QR decoder from this
+            # private ZBar build; disabling NLS avoids binding the dylib to
+            # Homebrew gettext/libiconv and keeps the packaged library
+            # self-contained across current macOS runner images.
             AUTOCONF_FLAGS="$AUTOCONF_FLAGS \
                 --with-x=no \
                 --enable-video=no \
-                --with-jpeg=no"
+                --with-jpeg=no \
+                --disable-nls"
         else
             # linux target
             AUTOCONF_FLAGS="$AUTOCONF_FLAGS \
