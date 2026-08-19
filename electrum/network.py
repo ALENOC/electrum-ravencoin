@@ -209,13 +209,11 @@ class BestEffortRequestFailed(NetworkException): pass
 class WriteAuthorizationState(str, Enum):
     """The canonical outcome of Network.get_write_authorization().
 
-    interface.ready, the policy-conforming backend claim, and
-    chain_validation_state == VERIFIED are each necessary but not sufficient
-    for trusted chain-dependent actions.  A single server is never allowed to
-    promote its own post-checkpoint view to trusted wallet state. Broadcasts
-    and verified reads additionally require independent agreement across at
-    least MIN_INDEPENDENT_OPERATOR_GROUPS distinct, individually-validated
-    operators.
+    interface.ready, the policy-conforming backend claim, chain validation,
+    and an authenticated operatorGroup are required for trusted chain-dependent
+    actions. One trusted operator is sufficient for normal Electrum operation.
+    If multiple trusted operator groups are connected, every group is compared
+    and any chain disagreement still fails closed instead of being ignored.
     """
     AUTHORIZED = "AUTHORIZED"
     #: Fewer than MIN_INDEPENDENT_OPERATOR_GROUPS distinct, individually
@@ -257,10 +255,12 @@ class WriteAuthorization(NamedTuple):
     window_hashes: Tuple[str, ...] = ()
 
 
-#: A single operator, however many endpoints it runs, is not independent
-#: consensus. Two is the minimum for "independent agreement" to mean
-#: anything; this is deliberately not configurable from a remote source.
-MIN_INDEPENDENT_OPERATOR_GROUPS = 2
+#: One authenticated, individually validated operator group is sufficient for
+#: normal wallet operation, preserving the traditional Electrum availability
+#: model. If multiple trusted groups are connected, all are still compared and
+#: any disagreement fails closed. This threshold is not remotely configurable.
+MIN_INDEPENDENT_OPERATOR_GROUPS = 1
+MULTI_OPERATOR_ASSURANCE_GROUPS = 2
 
 #: Length of the recent-chain window every authorized operator group must
 #: agree on, hash-for-hash, ending at the shortest validated tip among the
@@ -1120,11 +1120,10 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
                 len(groups))
         min_height = min(heights)
 
-        # Freshness: agreement over an old window must never stand in for
-        # agreement about the present. The bar is the best tip ANY connected
-        # interface reports (server-reported tips only ever raise the bar,
-        # which can block writes -- fail closed -- but never lower it).
-        best_tip = max(self._connected_tip_heights())
+        # Freshness is measured only across authenticated/validated operator
+        # representatives. Discovery-only endpoints must not be able to DoS a
+        # single trusted operator by advertising a fabricated higher tip.
+        best_tip = max(heights)
         if best_tip - min_height > MAX_WITNESS_TIP_LAG:
             return WriteAuthorization(
                 WriteAuthorizationState.STALE_CHAIN_EVIDENCE,
@@ -1171,8 +1170,8 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
             min(representatives, key=lambda i: i.server.to_friendly_name()))
         return WriteAuthorization(
             WriteAuthorizationState.AUTHORIZED,
-            f"{len(groups)} independent operator groups agree on all "
-            f"{RECENT_AGREEMENT_WINDOW} recent blocks through height {min_height}",
+            (f"{len(groups)} trusted operator group(s) validated on all "
+             f"{RECENT_AGREEMENT_WINDOW} recent blocks through height {min_height}"),
             len(groups),
             participant_interfaces=tuple(representatives),
             relay_interface=relay_interface,

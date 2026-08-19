@@ -1,10 +1,9 @@
-"""F2 write-authorization gate: independent-operator consensus for broadcast.
+"""Trusted-operator authorization for broadcast and verified reads.
 
-interface.ready, the policy-conforming backend claim, and
-chain_validation_state == VERIFIED are each necessary but not sufficient for
-trusted chain-dependent state. A single server is still one operator. The
-same independent recent-chain evidence now gates both broadcast and promotion
-of server-provided state to SPV-verified wallet state.
+A single authenticated, individually validated operator is sufficient for normal
+Electrum operation. If multiple trusted operator groups are online, their recent
+chain windows must agree; disagreement still fails closed. Discovery-only servers
+never become trusted merely because they are connected.
 These tests exercise the real, unmocked Network.get_write_authorization()
 and Network.broadcast_transaction() against fixture interfaces standing in
 for the adversarial scenarios from the F2 re-audit.
@@ -124,17 +123,15 @@ class TestWriteAuthorizationGate(ElectrumTestCase):
             auth = net.get_write_authorization()
         self.assertEqual(WriteAuthorizationState.UNVERIFIED_CHAIN, auth.state)
 
-    def test_single_operator_group_is_insufficient(self):
-        """Case A / B: one malicious (or honest) operator, any number of its
-        own endpoints, is not independent consensus."""
-        a = _safe_interface("cipig-a.example")
-        b = _safe_interface("cipig-b.example")
-        c = _safe_interface("cipig-c.example")
-        net = _network_with_interfaces(a, b, c)
-        with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
-            auth = net.get_write_authorization()
-        self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY, auth.state)
-        self.assertEqual(1, auth.operator_group_count)
+    def test_single_trusted_operator_group_authorizes(self):
+    a = _safe_interface("cipig-a.example")
+    b = _safe_interface("cipig-b.example")
+    c = _safe_interface("cipig-c.example")
+    net = _network_with_interfaces(a, b, c)
+    with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
+        auth = net.get_write_authorization()
+    self.assertEqual(WriteAuthorizationState.AUTHORIZED, auth.state)
+    self.assertEqual(1, auth.operator_group_count)
 
     def test_two_independent_agreeing_operators_authorize(self):
         a = _safe_interface("cipig-a.example", height=HONEST_HEIGHT, chain_hash=HONEST_HASH)
@@ -187,17 +184,14 @@ class TestWriteAuthorizationGate(ElectrumTestCase):
         self.assertEqual(HONEST_HEIGHT - 2 - RECENT_AGREEMENT_WINDOW + 1, auth.window_start)
         a.blockchain.get_hash.assert_called_with(HONEST_HEIGHT - 2)
 
-    def test_unknown_operator_endpoint_does_not_count_toward_diversity(self):
-        """Case (Step 11): a valid-looking, individually-safe server with no
-        known operatorGroup must not silently become its own independent
-        group, even paired with one real known operator."""
-        known = _safe_interface("cipig-a.example")
-        unknown = _safe_interface("no-metadata.example")
-        net = _network_with_interfaces(known, unknown)
-        with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
-            auth = net.get_write_authorization()
-        self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY, auth.state)
-        self.assertEqual(1, auth.operator_group_count)
+    def test_unknown_operator_does_not_add_trust_or_block_known_operator(self):
+    known = _safe_interface("cipig-a.example")
+    unknown = _safe_interface("no-metadata.example")
+    net = _network_with_interfaces(known, unknown)
+    with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
+        auth = net.get_write_authorization()
+    self.assertEqual(WriteAuthorizationState.AUTHORIZED, auth.state)
+    self.assertEqual(1, auth.operator_group_count)
 
     def test_three_operators_two_conflicting_is_still_a_conflict_not_a_vote(self):
         """No majority rule: 2-against-1 must still fail closed, not win by
@@ -210,19 +204,14 @@ class TestWriteAuthorizationGate(ElectrumTestCase):
             auth = net.get_write_authorization()
         self.assertEqual(WriteAuthorizationState.CHAIN_CONFLICT, auth.state)
 
-    def test_oneserver_mode_does_not_bypass_the_gate(self):
-        """Step 13: there is no separate trusted/owned-infrastructure mode
-        with its own anchors in this codebase today (oneserver + TLS
-        fingerprint pinning still describes exactly one operator, and does
-        not defend against a malicious/compromised pinned server). Public
-        mode must not be silently relaxed for it."""
-        a = _safe_interface("cipig-a.example")
-        net = _network_with_interfaces(a)
-        net.oneserver = True
-        with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
-            auth = net.get_write_authorization()
-        self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY, auth.state)
-
+    def test_oneserver_mode_allows_one_trusted_operator(self):
+    a = _safe_interface("cipig-a.example")
+    net = _network_with_interfaces(a)
+    net.oneserver = True
+    with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
+        auth = net.get_write_authorization()
+    self.assertEqual(WriteAuthorizationState.AUTHORIZED, auth.state)
+    self.assertEqual(1, auth.operator_group_count)
 
 class TestBroadcastGuardedByWriteAuthorization(unittest.IsolatedAsyncioTestCase):
     """The original F2 regression: construct interfaces in exactly the state
@@ -247,33 +236,27 @@ class TestBroadcastGuardedByWriteAuthorization(unittest.IsolatedAsyncioTestCase)
         iface.got_disconnected = asyncio.Event()
         return iface
 
-    async def test_single_fabricated_chain_operator_cannot_authorize_broadcast(self):
-        """Case A: one malicious server, individually SAFE_CORE_VERIFIED +
-        VERIFIED + ready -- exactly the pre-remediation F2 PoC end state.
-        Must not reach the RPC at all.
-        """
-        malicious = self._live(_safe_interface("cipig-a.example"))  # stands in for the impostor
-        net = _network_with_interfaces(malicious)
-        tx = self._fake_tx()
-        with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
-            with self.assertRaises(BroadcastNotAuthorized) as caught:
-                await net.broadcast_transaction(tx, timeout=5)
-        self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY,
-                         caught.exception.authorization.state)
-        malicious.session.send_request.assert_not_called()
+    async def test_single_trusted_operator_can_authorize_broadcast(self):
+    """Residual trust: compromise of the sole trusted operator can deceive the client."""
+    trusted = self._live(_safe_interface("cipig-a.example"))
+    net = _network_with_interfaces(trusted)
+    tx = self._fake_tx()
+    with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
+        await net.broadcast_transaction(tx, timeout=5)
+    trusted.session.send_request.assert_awaited_once_with(
+        'blockchain.transaction.broadcast', [tx.serialize()], timeout=5)
 
-    async def test_two_endpoints_same_malicious_operator_cannot_authorize_broadcast(self):
-        """Case B: two endpoints, same operatorGroup -- must still count as
-        one, and still block."""
-        a = self._live(_safe_interface("cipig-a.example"))
-        b = self._live(_safe_interface("cipig-b.example"))
-        net = _network_with_interfaces(a, b)
-        tx = self._fake_tx()
-        with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
-            with self.assertRaises(BroadcastNotAuthorized):
-                await net.broadcast_transaction(tx, timeout=5)
-        a.session.send_request.assert_not_called()
-        b.session.send_request.assert_not_called()
+    async def test_two_endpoints_same_trusted_operator_count_as_one_and_authorize(self):
+    a = self._live(_safe_interface("cipig-a.example"))
+    b = self._live(_safe_interface("cipig-b.example"))
+    net = _network_with_interfaces(a, b)
+    tx = self._fake_tx()
+    with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
+        auth = net.get_write_authorization()
+        self.assertEqual(WriteAuthorizationState.AUTHORIZED, auth.state)
+        self.assertEqual(1, auth.operator_group_count)
+        await net.broadcast_transaction(tx, timeout=5)
+    self.assertEqual(1, a.session.send_request.await_count + b.session.send_request.await_count)
 
     async def test_conflicting_independent_operators_cannot_authorize_broadcast(self):
         """Case C: independent operators disagree -- fail closed."""
@@ -302,33 +285,25 @@ class TestBroadcastGuardedByWriteAuthorization(unittest.IsolatedAsyncioTestCase)
         net.interface.session.send_request.assert_awaited_once_with(
             'blockchain.transaction.broadcast', [tx.serialize()], timeout=5)
 
-    async def test_directory_listing_alone_does_not_authorize_broadcast(self):
-        """Case E: a server present in a correctly-signed directory (i.e.
-        carrying an operatorGroup claim) but that never actually passed
-        individual backend/chain validation must not count. Simulated here
-        by an interface that is *not* individually safe -- directory
-        membership never substitutes for that validation.
-        """
-        listed_but_unvalidated = self._live(_safe_interface("independent.example", safe=False))
-        only_operator = self._live(_safe_interface("cipig-a.example"))
-        net = _network_with_interfaces(only_operator, listed_but_unvalidated)
-        tx = self._fake_tx()
-        with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
-            with self.assertRaises(BroadcastNotAuthorized) as caught:
-                await net.broadcast_transaction(tx, timeout=5)
-        self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY,
-                         caught.exception.authorization.state)
-        only_operator.session.send_request.assert_not_called()
+    async def test_unvalidated_directory_entry_does_not_add_trust(self):
+    listed_but_unvalidated = self._live(_safe_interface("independent.example", safe=False))
+    trusted = self._live(_safe_interface("cipig-a.example"))
+    net = _network_with_interfaces(trusted, listed_but_unvalidated)
+    tx = self._fake_tx()
+    with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
+        auth = net.get_write_authorization()
+        self.assertEqual(WriteAuthorizationState.AUTHORIZED, auth.state)
+        self.assertEqual(1, auth.operator_group_count)
+        await net.broadcast_transaction(tx, timeout=5)
+    trusted.session.send_request.assert_awaited_once()
 
-    async def test_ready_safe_verified_alone_is_not_sufficient_comment_regression(self):
-        """Guards against someone reverting the gate back to
-        `assert interface.ready.done(); send RPC`: an interface that is
-        fully ready/safe/verified, alone, must still be refused.
-        """
-        solo = self._live(_safe_interface("cipig-a.example"))
-        net = _network_with_interfaces(solo)
-        tx = self._fake_tx()
-        with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
-            with self.assertRaises(BroadcastNotAuthorized):
-                await net.broadcast_transaction(tx, timeout=5)
-        solo.session.send_request.assert_not_called()
+    async def test_ready_safe_verified_unknown_operator_is_still_blocked(self):
+    solo = self._live(_safe_interface("no-metadata.example"))
+    net = _network_with_interfaces(solo)
+    tx = self._fake_tx()
+    with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
+        with self.assertRaises(BroadcastNotAuthorized) as caught:
+            await net.broadcast_transaction(tx, timeout=5)
+    self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY,
+                     caught.exception.authorization.state)
+    solo.session.send_request.assert_not_called()

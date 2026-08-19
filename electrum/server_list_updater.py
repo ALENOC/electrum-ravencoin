@@ -20,9 +20,9 @@ private key is never stored in this repository.
 
 If no valid signed registry is available, the client deliberately falls back to
 one compiled trusted anchor (``electrumx.raventag.com``) plus unsigned discovery.
-With the quorum threshold still at two independent operators, sensitive actions
-therefore fail closed until a second operator is present in a valid signed
-registry.
+One authenticated and individually validated operator is sufficient for normal
+wallet operation. A signed registry can add independent operator groups later;
+when multiple trusted groups are online, disagreement still fails closed.
 """
 
 from __future__ import annotations

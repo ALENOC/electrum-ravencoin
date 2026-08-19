@@ -9,15 +9,15 @@ block-number-aware `progpow::verify(context, block_number, ...)`, while the
 pinned Python binding does not expose that function. Calling its differently
 shaped `kawpow_verify(context, ...)` would create a false security guarantee.
 
-The single-malicious-ElectrumX path is closed instead by extending the existing
-independent-operator chain-consensus boundary from transaction broadcast to
-promotion of remote data into verified wallet state. The exact serving
-interface must match the agreed chain, the claimed height must be no newer than
-the agreed witness tip, authorization is rechecked after the proof request,
-and unverified positive-height outputs/spends are quarantined from balances and
-coin selection. Existing post-checkpoint verification caches are demoted once
-and revalidated. Post-KAWPOW heights also cannot downgrade to legacy hashing by
-supplying an old timestamp.
+The independent-operator comparison machinery remains, but the wallet restores
+the traditional Electrum availability model: one authenticated, individually
+validated operator is sufficient for normal reads, SPV promotion, and broadcast.
+If multiple trusted operator groups are online, their recent-chain windows must
+agree and any conflict fails closed. Compromise of the sole trusted operator is
+therefore an explicit residual risk; this client is not a full Ravencoin consensus
+verifier. Unverified positive-height state remains quarantined until the serving
+trusted interface passes authorization, and post-KAWPOW heights still cannot
+downgrade to legacy hashing via timestamp manipulation.
 
 ## RVN-SEC-002 — backend claim semantics
 
