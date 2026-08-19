@@ -272,14 +272,27 @@ def load_cached_remote_servers(cache_dir: str) -> Optional[Tuple[Dict[str, dict]
 
 
 async def _read_limited_http_response(response: Any) -> str:
-    """Read at most MAX_REMOTE_BYTES, including decompressed response bytes."""
+    """Read the full response while enforcing a hard post-decompression limit."""
     response.raise_for_status()
     content_length = response.content_length
     if content_length is not None and content_length > MAX_REMOTE_BYTES:
         raise ServerListError("remote server list exceeds advertised size limit")
-    raw = await response.content.read(MAX_REMOTE_BYTES + 1)
-    if len(raw) > MAX_REMOTE_BYTES:
-        raise ServerListError("remote server list exceeds size limit")
+
+    chunks = []
+    total = 0
+    while True:
+        remaining = MAX_REMOTE_BYTES + 1 - total
+        if remaining <= 0:
+            raise ServerListError("remote server list exceeds size limit")
+        chunk = await response.content.read(min(16 * 1024, remaining))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_REMOTE_BYTES:
+            raise ServerListError("remote server list exceeds size limit")
+        chunks.append(chunk)
+
+    raw = b"".join(chunks)
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
