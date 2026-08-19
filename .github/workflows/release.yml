@@ -8,6 +8,7 @@ on:
       - "contrib/build-linux/**"
       - "contrib/build-wine/**"
       - "contrib/osx/**"
+      - "contrib/make_zbar.sh"
       - "contrib/release_signing.py"
       - "RELEASE_SIGNING.md"
       - "RELEASE_NOTES_1.3.0rc2.md"
@@ -21,7 +22,9 @@ permissions:
 
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  # PR validation should follow the newest packaging commit. Tag builds must
+  # never be cancelled because they produce the release artifact set.
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 jobs:
   validate:
