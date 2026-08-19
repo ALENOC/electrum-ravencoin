@@ -58,6 +58,7 @@ jobs:
             electrum/tests/test_interface.py \
             electrum/tests/test_blockchain.py \
             electrum/tests/test_security_remediation.py \
+            electrum/tests/test_server_list_updater.py \
             electrum/tests/test_network.py \
             electrum/tests/test_verifier.py \
             electrum/tests/test_write_authorization.py \
