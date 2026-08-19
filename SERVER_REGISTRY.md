@@ -15,9 +15,17 @@ The private key must remain outside the repository, CI, release artifacts, cloud
 
 The server-registry key is deliberately different from the Ravencoin Core safety-policy signing key. Compromise of one signing role must not automatically compromise the other.
 
+## Availability and assurance model
+
+One authenticated, individually validated `operatorGroup` is sufficient for normal Electrum wallet operation. This preserves the practical single-server model used by traditional Electrum clients.
+
+When two or more trusted operator groups are available, the client compares their recent-chain evidence. Agreement provides stronger multi-operator assurance; disagreement fails closed and blocks sensitive chain-dependent actions. Discovery-only servers without authenticated `operatorGroup` metadata never count as trusted operators.
+
+This means a sole trusted operator is an explicit trust assumption: compromise of that operator can still deceive a lightweight client that is not a full Ravencoin consensus verifier. The signed registry makes it possible to add independent operators later without recompiling already-released clients.
+
 ## Updating the registry
 
-1. Edit `electrum/servers.json` to the intended directory. `operatorGroup` should be present only on operators that have actually been reviewed and are intended to count toward independent quorum.
+1. Edit `electrum/servers.json` to the intended directory. `operatorGroup` should be present only on operators that have actually been reviewed and are intended to be trusted.
 2. Increment `registryVersion`. Never reuse an old version number for different contents.
 3. From a trusted/offline machine, sign the directory with:
 
@@ -37,4 +45,4 @@ Already-built clients poll the signed registry and accept a newer registry only 
 
 If the signed registry cannot be downloaded, a still-valid cached signed registry remains active. If no valid signed registry exists, the client falls back to the compiled RavenTag anchor plus unsigned discovery data; unsigned data cannot create trusted operator groups.
 
-If a signed registry expires while the client remains open, dynamic trust metadata is removed and the client returns to the fail-closed fallback. The quorum threshold itself is not remotely configurable.
+If a signed registry expires while the client remains open, dynamic trust metadata is removed and the client returns to its compiled trusted-anchor fallback. The minimum trusted-operator threshold is local client policy and is not remotely configurable.
