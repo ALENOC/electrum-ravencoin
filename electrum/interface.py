@@ -483,6 +483,10 @@ class Interface(Logger):
                 # empty file means this is CA signed, not self-signed
                 f.write('')
         else:
+            if not self._get_expected_fingerprint():
+                raise ErrorGettingSSLCertFromServer(
+                    "self-signed TLS server requires an explicit fingerprint on first contact"
+                )
             await self._save_certificate()
 
     def _is_saved_ssl_cert_available(self):

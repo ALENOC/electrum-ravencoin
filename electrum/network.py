@@ -209,14 +209,13 @@ class BestEffortRequestFailed(NetworkException): pass
 class WriteAuthorizationState(str, Enum):
     """The canonical outcome of Network.get_write_authorization().
 
-    interface.ready, SAFE_CORE_VERIFIED, and chain_validation_state ==
-    VERIFIED are each necessary but not sufficient for a sensitive write
-    (transaction broadcast): a single server, however perfectly it claims
-    those states, is still one operator, and light KAWPOW verification
-    (server-policy F2) means one operator alone can fabricate a
-    post-checkpoint chain that satisfies them. Broadcast additionally
-    requires independent agreement across at least MIN_INDEPENDENT_OPERATOR_GROUPS
-    distinct, individually-validated operators.
+    interface.ready, the policy-conforming backend claim, and
+    chain_validation_state == VERIFIED are each necessary but not sufficient
+    for trusted chain-dependent actions.  A single server is never allowed to
+    promote its own post-checkpoint view to trusted wallet state. Broadcasts
+    and verified reads additionally require independent agreement across at
+    least MIN_INDEPENDENT_OPERATOR_GROUPS distinct, individually-validated
+    operators.
     """
     AUTHORIZED = "AUTHORIZED"
     #: Fewer than MIN_INDEPENDENT_OPERATOR_GROUPS distinct, individually
@@ -1180,6 +1179,91 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
             window_start=window_start,
             window_tip=min_height,
             window_hashes=next(iter(windows)))
+
+    def get_verified_read_authorization(
+            self, interface: Optional[Interface], *, required_height: Optional[int] = None
+    ) -> WriteAuthorization:
+        """Authorize promotion of remote data to verified wallet state.
+
+        The pinned Python KAWPOW binding computes Ravencoin's final hash from
+        a supplied mix but does not expose Core's block-number-aware
+        ``progpow::verify`` mix recomputation.  A single ElectrumX server is
+        therefore never enough evidence to promote its own chain + Merkle
+        proof to trusted wallet state.
+        """
+        authorization = self.get_write_authorization()
+        if authorization.state != WriteAuthorizationState.AUTHORIZED:
+            return authorization
+        if interface is None or not interface.is_connected_and_ready():
+            return WriteAuthorization(
+                WriteAuthorizationState.UNVERIFIED_CHAIN,
+                "read interface is not connected and ready",
+                authorization.operator_group_count,
+            )
+        if not interface.is_safe_ravencoin_mainnet_endpoint:
+            return WriteAuthorization(
+                WriteAuthorizationState.UNVERIFIED_CHAIN,
+                "read interface has not passed backend and chain gates",
+                authorization.operator_group_count,
+            )
+        if operator_group_for_server(interface.server) is None:
+            return WriteAuthorization(
+                WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY,
+                "read interface has no known operator-group identity",
+                authorization.operator_group_count,
+            )
+        if authorization.window_start is None or authorization.window_tip is None:
+            return WriteAuthorization(
+                WriteAuthorizationState.UNVERIFIED_CHAIN,
+                "independent recent-chain evidence is incomplete",
+                authorization.operator_group_count,
+            )
+        if required_height is not None:
+            if type(required_height) is not int or required_height < 0:
+                return WriteAuthorization(
+                    WriteAuthorizationState.UNVERIFIED_CHAIN,
+                    "verified-read height is malformed",
+                    authorization.operator_group_count,
+                )
+            if required_height > authorization.window_tip:
+                return WriteAuthorization(
+                    WriteAuthorizationState.STALE_CHAIN_EVIDENCE,
+                    f"read height {required_height} is newer than independently "
+                    f"agreed tip {authorization.window_tip}",
+                    authorization.operator_group_count,
+                )
+        try:
+            if interface.blockchain.height() < authorization.window_tip:
+                raise ValueError("read interface is behind agreed tip")
+            read_window = tuple(
+                interface.blockchain.get_hash(height)
+                for height in range(
+                    authorization.window_start, authorization.window_tip + 1
+                )
+            )
+        except BaseException:
+            return WriteAuthorization(
+                WriteAuthorizationState.UNVERIFIED_CHAIN,
+                "read interface chain evidence is unavailable",
+                authorization.operator_group_count,
+            )
+        if read_window != authorization.window_hashes:
+            return WriteAuthorization(
+                WriteAuthorizationState.CHAIN_CONFLICT,
+                "read interface is not on the independently agreed chain",
+                authorization.operator_group_count,
+            )
+        return authorization
+
+    def is_interface_authorized_for_verified_reads(
+            self, interface: Optional[Interface], *, required_height: Optional[int] = None
+    ) -> bool:
+        return (
+            self.get_verified_read_authorization(
+                interface, required_height=required_height
+            ).state
+            == WriteAuthorizationState.AUTHORIZED
+        )
 
     def _connected_tip_heights(self) -> List[int]:
         """Best-effort current heights of all connected interfaces: the

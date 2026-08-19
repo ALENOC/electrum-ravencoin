@@ -111,6 +111,9 @@ class SPV(NetworkJobOnDefaultServer):
         # or before headers are available
         if not (0 < tx_height <= local_height):
             return True
+        if not self.network.is_interface_authorized_for_verified_reads(
+                self.interface, required_height=tx_height):
+            return True
         # if it's in the checkpoint region, we still might not have the header
         header = self.blockchain.read_header(tx_height)
         if header is None:
@@ -654,6 +657,11 @@ class SPV(NetworkJobOnDefaultServer):
     async def _request_and_verify_single_proof(self, tx_hash, tx_height, *, quick_return=False):
         if quick_return and (tx_hash in self.merkle_roots or self.wallet.db.get_verified_tx(tx_hash)):
             return
+        if not self.network.is_interface_authorized_for_verified_reads(
+                self.interface, required_height=tx_height):
+            raise GracefulDisconnect(
+                "confirmed state lacks independent recent-chain consensus"
+            )
         self.logger.info(f'requesting merkle {tx_hash}')
         try:
             self._requests_sent += 1
@@ -681,6 +689,14 @@ class SPV(NetworkJobOnDefaultServer):
             else:
                 self.logger.info(repr(e))
                 raise GracefulDisconnect(e) from e
+        # A witness may disconnect or cease matching the agreed chain
+        # while the proof request is in flight; stale authorization is not a
+        # capability that may be cached as verified state.
+        if not self.network.is_interface_authorized_for_verified_reads(
+                self.interface, required_height=tx_height):
+            raise GracefulDisconnect(
+                "independent chain consensus changed while verifying state"
+            )
         # we passed all the tests
         self.merkle_roots[tx_hash] = header.get('merkle_root')
         self.logger.info(f"verified {tx_hash}")    

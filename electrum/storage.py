@@ -38,6 +38,13 @@ from .util import (profiler, InvalidPassword, WalletFileException, bfh, standard
 from .wallet_db import WalletDB
 from .logging import Logger
 
+SCRYPT_N = 1 << 15
+SCRYPT_R = 8
+SCRYPT_P = 1
+SCRYPT_DKLEN = 64
+SCRYPT_SALT_LEN = 16
+SCRYPT_MAXMEM = 64 * 1024 * 1024
+
 
 def get_derivation_used_for_hw_device_encryption():
     return ("m"
@@ -47,8 +54,9 @@ def get_derivation_used_for_hw_device_encryption():
 
 class StorageEncryptionVersion(IntEnum):
     PLAINTEXT = 0
-    USER_PASSWORD = 1
-    XPUB_PASSWORD = 2
+    USER_PASSWORD = 1          # legacy BIE1; readable and auto-migrated
+    XPUB_PASSWORD = 2          # BIE2 hardware-derived secret
+    USER_PASSWORD_SCRYPT = 3   # BIE3; default for new human passwords
 
 
 class StorageReadWriteError(Exception): pass
@@ -64,6 +72,7 @@ class WalletStorage(Logger):
         self.logger.info(f"wallet path {self.path}")
         self.pubkey = None
         self.decrypted = ''
+        self._kdf_salt = None
         try:
             test_read_write_permissions(self.path)
         except IOError as e:
@@ -98,6 +107,7 @@ class WalletStorage(Logger):
         os.replace(temp_path, self.path)
         os_chmod(self.path, mode)
         self._file_exists = True
+        self.raw = s
         self.logger.info(f"saved {self.path}")
 
     def file_exists(self) -> bool:
@@ -117,7 +127,10 @@ class WalletStorage(Logger):
         return self.get_encryption_version() != StorageEncryptionVersion.PLAINTEXT
 
     def is_encrypted_with_user_pw(self) -> bool:
-        return self.get_encryption_version() == StorageEncryptionVersion.USER_PASSWORD
+        return self.get_encryption_version() in (
+            StorageEncryptionVersion.USER_PASSWORD,
+            StorageEncryptionVersion.USER_PASSWORD_SCRYPT,
+        )
 
     def is_encrypted_with_hw_device(self) -> bool:
         return self.get_encryption_version() == StorageEncryptionVersion.XPUB_PASSWORD
@@ -128,30 +141,72 @@ class WalletStorage(Logger):
         0: plaintext / no encryption
 
         ECIES, private key derived from a password,
-        1: password is provided by user
+        1: legacy user password (BIE1; migrated after unlock)
         2: password is derived from an xpub; used with hw wallets
+        3: user password with random-salt scrypt KDF (BIE3)
         """
         return self._encryption_version
 
     def _init_encryption_version(self):
         try:
-            magic = base64.b64decode(self.raw)[0:4]
+            decoded = base64.b64decode(self.raw)
+            magic = decoded[0:4]
             if magic == b'BIE1':
                 return StorageEncryptionVersion.USER_PASSWORD
             elif magic == b'BIE2':
                 return StorageEncryptionVersion.XPUB_PASSWORD
+            elif magic == b'BIE3':
+                if len(decoded) < 4 + SCRYPT_SALT_LEN + 85:
+                    raise WalletFileException("invalid BIE3 wallet envelope")
+                self._kdf_salt = decoded[4:4 + SCRYPT_SALT_LEN]
+                return StorageEncryptionVersion.USER_PASSWORD_SCRYPT
             else:
                 return StorageEncryptionVersion.PLAINTEXT
+        except WalletFileException:
+            raise
         except Exception:
             return StorageEncryptionVersion.PLAINTEXT
 
     @staticmethod
     def get_eckey_from_password(password):
+        """Legacy BIE1/BIE2 KDF. Never use for new human-password files."""
         if password is None:
             password = ""
-        secret = hashlib.pbkdf2_hmac('sha512', password.encode('utf-8'), b'', iterations=1024)
-        ec_key = ecc.ECPrivkey.from_arbitrary_size_secret(secret)
-        return ec_key
+        secret = hashlib.pbkdf2_hmac(
+            'sha512', password.encode('utf-8'), b'', iterations=1024
+        )
+        return ecc.ECPrivkey.from_arbitrary_size_secret(secret)
+
+    @staticmethod
+    def get_eckey_from_password_scrypt(password, salt: bytes):
+        if password is None:
+            password = ""
+        if not isinstance(salt, bytes) or len(salt) != SCRYPT_SALT_LEN:
+            raise WalletFileException("invalid BIE3 KDF salt")
+        secret = hashlib.scrypt(
+            password.encode('utf-8'), salt=salt,
+            n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P,
+            dklen=SCRYPT_DKLEN, maxmem=SCRYPT_MAXMEM,
+        )
+        return ecc.ECPrivkey.from_arbitrary_size_secret(secret)
+
+    def _get_eckey_for_password(self, password):
+        if self._encryption_version == StorageEncryptionVersion.USER_PASSWORD_SCRYPT:
+            if self._kdf_salt is None:
+                raise WalletFileException("BIE3 KDF salt unavailable")
+            return self.get_eckey_from_password_scrypt(password, self._kdf_salt)
+        return self.get_eckey_from_password(password)
+
+    def _decode_bie3_envelope(self):
+        try:
+            decoded = base64.b64decode(self.raw)
+        except Exception as e:
+            raise WalletFileException("invalid BIE3 wallet envelope") from e
+        if decoded[:4] != b'BIE3' or len(decoded) < 4 + SCRYPT_SALT_LEN + 85:
+            raise WalletFileException("invalid BIE3 wallet envelope")
+        salt = decoded[4:4 + SCRYPT_SALT_LEN]
+        inner = base64.b64encode(decoded[4 + SCRYPT_SALT_LEN:])
+        return salt, inner
 
     def _get_encryption_magic(self):
         v = self._encryption_version
@@ -159,32 +214,53 @@ class WalletStorage(Logger):
             return b'BIE1'
         elif v == StorageEncryptionVersion.XPUB_PASSWORD:
             return b'BIE2'
+        elif v == StorageEncryptionVersion.USER_PASSWORD_SCRYPT:
+            return b'BIE3'
         else:
             raise WalletFileException('no encryption magic for version: %s' % v)
 
     def decrypt(self, password) -> None:
-        """Raises an InvalidPassword exception on invalid password"""
+        """Raise InvalidPassword for a bad password and migrate BIE1 to BIE3."""
         if self.is_past_initial_decryption():
             return
-        ec_key = self.get_eckey_from_password(password)
-        if self.raw:
-            enc_magic = self._get_encryption_magic()
-            s = zlib.decompress(ec_key.decrypt_message(self.raw, enc_magic))
-            s = s.decode('utf8')
+        original_version = self._encryption_version
+        if original_version == StorageEncryptionVersion.USER_PASSWORD_SCRYPT:
+            salt, inner = self._decode_bie3_envelope()
+            self._kdf_salt = salt
+            ec_key = self._get_eckey_for_password(password)
+            s = zlib.decompress(ec_key.decrypt_message(inner, b'BIE3')).decode('utf8')
         else:
-            s = ''
+            ec_key = self._get_eckey_for_password(password)
+            if self.raw:
+                enc_magic = self._get_encryption_magic()
+                s = zlib.decompress(ec_key.decrypt_message(self.raw, enc_magic)).decode('utf8')
+            else:
+                s = ''
         self.pubkey = ec_key.get_public_key_hex()
         self.decrypted = s
+
+        if original_version == StorageEncryptionVersion.USER_PASSWORD:
+            self._kdf_salt = os.urandom(SCRYPT_SALT_LEN)
+            self._encryption_version = StorageEncryptionVersion.USER_PASSWORD_SCRYPT
+            migrated_key = self._get_eckey_for_password(password)
+            self.pubkey = migrated_key.get_public_key_hex()
+            self.write(self.decrypted)
+            self.logger.info("migrated legacy BIE1 wallet encryption to BIE3")
 
     def encrypt_before_writing(self, plaintext: str) -> str:
         s = plaintext
         if self.pubkey:
-            s = bytes(s, 'utf8')
-            c = zlib.compress(s, level=zlib.Z_BEST_SPEED)
+            c = zlib.compress(bytes(s, 'utf8'), level=zlib.Z_BEST_SPEED)
             enc_magic = self._get_encryption_magic()
             public_key = ecc.ECPubkey(bfh(self.pubkey))
-            s = public_key.encrypt_message(c, enc_magic)
-            s = s.decode('utf8')
+            inner = public_key.encrypt_message(c, enc_magic)
+            if self._encryption_version == StorageEncryptionVersion.USER_PASSWORD_SCRYPT:
+                if self._kdf_salt is None or len(self._kdf_salt) != SCRYPT_SALT_LEN:
+                    raise WalletFileException("BIE3 KDF salt unavailable")
+                envelope = b'BIE3' + self._kdf_salt + base64.b64decode(inner)
+                s = base64.b64encode(envelope).decode('ascii')
+            else:
+                s = inner.decode('utf8')
         return s
 
     def check_password(self, password: Optional[str]) -> None:
@@ -196,21 +272,29 @@ class WalletStorage(Logger):
         if not self.is_past_initial_decryption():
             self.decrypt(password)  # this sets self.pubkey
         assert self.pubkey is not None
-        if self.pubkey != self.get_eckey_from_password(password).get_public_key_hex():
+        if self.pubkey != self._get_eckey_for_password(password).get_public_key_hex():
             raise InvalidPassword()
 
     def set_password(self, password, enc_version=None):
-        """Set a password to be used for encrypting this storage."""
+        """Set storage encryption; legacy USER_PASSWORD requests become BIE3."""
         if not self.is_past_initial_decryption():
             raise Exception("storage needs to be decrypted before changing password")
         if enc_version is None:
             enc_version = self._encryption_version
+        enc_version = StorageEncryptionVersion(enc_version)
+        if enc_version == StorageEncryptionVersion.USER_PASSWORD:
+            enc_version = StorageEncryptionVersion.USER_PASSWORD_SCRYPT
         if password and enc_version != StorageEncryptionVersion.PLAINTEXT:
-            ec_key = self.get_eckey_from_password(password)
-            self.pubkey = ec_key.get_public_key_hex()
             self._encryption_version = enc_version
+            if enc_version == StorageEncryptionVersion.USER_PASSWORD_SCRYPT:
+                self._kdf_salt = os.urandom(SCRYPT_SALT_LEN)
+            else:
+                self._kdf_salt = None
+            ec_key = self._get_eckey_for_password(password)
+            self.pubkey = ec_key.get_public_key_hex()
         else:
             self.pubkey = None
+            self._kdf_salt = None
             self._encryption_version = StorageEncryptionVersion.PLAINTEXT
 
     def basename(self) -> str:

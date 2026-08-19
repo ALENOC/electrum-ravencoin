@@ -367,27 +367,30 @@ class Blockchain(Logger):
 
     @classmethod
     def verify_header(cls, header: dict, prev_hash: str, target: int, expected_header_hash: str=None) -> None:
+        actual_height = header.get('block_height')
+        if type(actual_height) is not int or actual_height < 0:
+            raise InvalidHeader("invalid block height")
+
+        # Core selects KAWPOW serialization by timestamp, while this light
+        # client also knows the chain position.  Once the chain is in the
+        # KAWPOW era, an old timestamp must never switch verification back to
+        # the legacy 80-byte hash path.
+        if actual_height >= constants.net.KawpowActivationHeight:
+            if header.get('timestamp', 0) < constants.net.KawpowActivationTS:
+                raise InvalidHeader(
+                    "post-activation block height cannot use legacy PoW serialization"
+                )
+            if 'nheight' not in header or header.get('nheight') != actual_height:
+                raise InvalidHeader(
+                    "declared nheight %s does not match chain height %s"
+                    % (header.get('nheight'), actual_height)
+                )
+
         _hash = hash_header(header)
         if expected_header_hash and expected_header_hash != _hash:
             raise InvalidHeader("hash mismatches with expected: {} vs {}".format(expected_header_hash, _hash))
         if prev_hash != header.get('prev_block_hash'):
             raise InvalidHeader("prev hash mismatch: %s vs %s" % (prev_hash, header.get('prev_block_hash')))
-        # KAWPOW-era headers carry their own height (nheight) inside the hashed
-        # bytes. Core treats a mismatch between the declared height and the
-        # header's actual chain position as consensus-invalid; this wallet's
-        # light KAWPOW verification does not otherwise catch a forged value,
-        # since nheight only affects which epoch dataset a full verifier would
-        # use. Only enforced once block_height is unambiguously in the KAWPOW
-        # range: 'nheight' is keyed off the header's own timestamp, so a
-        # height below activation with a stray future timestamp is left to the
-        # rest of validation rather than rejected here on an ambiguous parse.
-        actual_height = header.get('block_height')
-        if 'nheight' in header and actual_height is not None \
-                and actual_height >= constants.net.KawpowActivationHeight \
-                and header.get('nheight') != actual_height:
-            raise InvalidHeader(
-                "declared nheight %s does not match chain height %s"
-                % (header.get('nheight'), actual_height))
         if constants.net.TESTNET:
             return
         bits = cls.target_to_bits(target)
