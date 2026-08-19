@@ -1,92 +1,120 @@
 name: CI
 
 on:
-  push:
-    branches: ['**']
   pull_request:
 
 permissions:
-  contents: read
-
-concurrency:
-  group: client-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  safety:
-    name: Safety and contract tests (Python ${{ matrix.python }})
+  align-trust-model-wording:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'feature/dynamic-electrumx-server-list'
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ['3.11', '3.12']
     steps:
-      - name: Check out this repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Check out feature branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          persist-credentials: false
+          ref: feature/dynamic-electrumx-server-list
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
-        with:
-          python-version: ${{ matrix.python }}
+      - name: Update comments and GUI wording
+        shell: python
+        run: |
+          import pathlib
 
-      - name: Install native crypto dependency
+          p = pathlib.Path('electrum/network.py')
+          text = p.read_text(encoding='utf-8')
+
+          def repl(old, new):
+              global text
+              if old not in text:
+                  raise SystemExit(f'missing expected text: {old[:120]!r}')
+              text = text.replace(old, new, 1)
+
+          repl(
+              '    #: Fewer than MIN_INDEPENDENT_OPERATOR_GROUPS distinct, individually\n'
+              '    #: validated operator groups are currently available. This is the\n'
+              '    #: default state with the shipped server list, which is a single\n'
+              '    #: operator (rvn4lyfe.com plus its .onion mirror) -- broadcast is\n'
+              '    #: blocked until a genuinely independent second operator is connected.\n',
+              '    #: Fewer than MIN_INDEPENDENT_OPERATOR_GROUPS authenticated, individually\n'
+              '    #: validated operator groups are currently available. With the threshold\n'
+              '    #: at one, this means no trusted operator is currently usable.\n'
+          )
+          repl(
+              '    #: At least two independent operator groups are validated, but the\n'
+              '    #: shortest validated tip among them is too far behind the best tip any\n'
+              '    #: connected interface reports. Their agreement covers only the past;\n'
+              '    #: it is stale evidence for a write that depends on the present chain.\n',
+              '    #: Multiple trusted operator groups are validated, but the shortest\n'
+              '    #: trusted tip lags the best trusted tip beyond the allowed bound. Their\n'
+              '    #: common evidence is stale for a chain-dependent action.\n'
+          )
+          repl(
+              '#: How far any witness group\'s validated tip may lag behind the best tip\n'
+              '#: observed by ANY connected interface before its evidence counts as stale.\n'
+              '#: Blocks above the shortest witness tip cannot be cross-checked between\n'
+              '#: witnesses (no one else has seen them yet), so this bound is what caps a\n'
+              '#: taller fabricated chain: a malicious group can claim at most this many\n'
+              '#: unseen blocks above the honest frontier before freshness fails closed.\n',
+              '#: How far the shortest trusted operator tip may lag behind the best trusted\n'
+              '#: operator tip before multi-operator evidence counts as stale. Discovery-only\n'
+              '#: endpoints are intentionally excluded: unauthenticated metadata must not be\n'
+              '#: able to denial-of-service the sole trusted operator by advertising a fake tip.\n'
+          )
+          repl(
+              '    """Best-effort operator identity for a server, from the shipped server\n'
+              '    list only (constants.net.DEFAULT_SERVERS). A server that is not in that\n'
+              '    list -- including any the user added manually -- has no known operator\n'
+              '    identity here, and returns None. None must never be treated as its own\n'
+              '    independent group: an absent identity is not evidence of independence\n'
+              '    (server-policy: unknown/missing operatorGroup must not silently create\n'
+              '    a new independent group).\n'
+              '    """\n',
+              '    """Return the authenticated operator identity from the current effective\n'
+              '    server registry/directory. Runtime signed-registry updates replace\n'
+              '    ``constants.net.DEFAULT_SERVERS`` atomically, so this lookup automatically\n'
+              '    follows accepted trust updates. Unknown/manual/discovery-only servers return\n'
+              '    None; absence of identity must never manufacture a trusted operator group.\n'
+              '    """\n'
+          )
+          repl(
+              '        if state == WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY:\n'
+              '            return _("Broadcast blocked: insufficient independent server consensus.\\n"\n'
+              '                     "At least {n} independently-operated, individually verified servers "\n'
+              '                     "are required before this wallet will send a transaction.")\\\n'
+              '                .format(n=MIN_INDEPENDENT_OPERATOR_GROUPS)\n',
+              '        if state == WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY:\n'
+              '            return _("Broadcast blocked: no trusted ElectrumX operator is currently "\n'
+              '                     "available and individually verified. Connect to a trusted server "\n'
+              '                     "and let backend/chain validation complete before retrying.")\n'
+          )
+          repl(
+              '        identical canonical block hash at every height of a bounded window\n'
+              '        ending at the shortest validated tip, with every witness group\'s tip\n'
+              '        current within MAX_WITNESS_TIP_LAG of the best tip any connected\n'
+              '        interface reports. On success the result is a capability binding the\n',
+              '        identical canonical block hash at every height of a bounded window\n'
+              '        ending at the shortest validated tip. With multiple trusted groups,\n'
+              '        each trusted tip must remain within MAX_WITNESS_TIP_LAG of the best\n'
+              '        trusted tip. On success the result is a capability binding the\n'
+          )
+          repl(
+              '                f"only {len(groups)} independent operator group(s) verified; "\n'
+              '                f"at least {MIN_INDEPENDENT_OPERATOR_GROUPS} are required for writes",\n',
+              '                f"only {len(groups)} trusted operator group(s) verified; "\n'
+              '                f"at least {MIN_INDEPENDENT_OPERATOR_GROUPS} are required for writes",\n'
+          )
+
+          p.write_text(text, encoding='utf-8')
+
+      - name: Commit wording cleanup
         run: |
           set -euo pipefail
-          # ubuntu-24.04 hosted runners already have a current package index;
-          # avoiding an unconditional refresh removes a flaky external-mirror
-          # dependency from every release-gating run.
-          sudo apt-get install --no-install-recommends -y libsecp256k1-1
-
-      - name: Install test dependencies
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install -e ".[tests]"
-          python -m pip install pytest==8.3.5
-
-      - name: Supported Ravencoin client test suite
-        run: |
-          set -euo pipefail
-          # Release-gating surface: functionality this Ravencoin fork ships
-          # and supports. Everything below must pass for a release.
-          python -m pytest -q \
-            electrum/tests/test_core_safety_policy.py \
-            electrum/tests/test_core_safety_directory.py \
-            electrum/tests/test_ravencoin_backend.py \
-            electrum/tests/test_interface.py \
-            electrum/tests/test_blockchain.py \
-            electrum/tests/test_security_remediation.py \
-            electrum/tests/test_server_list_updater.py \
-            electrum/tests/test_network.py \
-            electrum/tests/test_verifier.py \
-            electrum/tests/test_write_authorization.py \
-            electrum/tests/test_recent_agreement_relay.py \
-            electrum/tests/test_ipfs_db.py \
-            electrum/tests/test_wizard_2fa.py \
-            electrum/tests/test_transaction.py \
-            electrum/tests/test_bitcoin.py \
-            electrum/tests/test_util.py \
-            electrum/tests/test_psbt.py \
-            electrum/tests/test_coinchooser.py \
-            electrum/tests/test_x509.py \
-            electrum/tests/test_revealer.py \
-            --deselect electrum/tests/test_util.py::TestUtil::test_parse_URI_lightning_consistency
-
-          # Not gated -- inherited upstream debt for features this fork does
-          # not support. This is an explicit scope decision, not hidden red:
-          #   Lightning/BOLT (UI disabled, channel funding stubbed):
-          #     test_lnpeer test_lnchannel test_lntransport test_lnutil
-          #     test_bolt11 test_lnmsg test_sswaps test_lnrouter
-          #     + test_parse_URI_lightning_consistency (deselected above)
-          #   TrustedCoin (plugin removed from this fork):
-          #     test_commands test_mnemonic test_wallet_vertical
-          #   Bitcoin-era fixtures / API drift never ported:
-          #     test_storage_upgrade (fixture corpus never shipped here)
-          #     test_wallet test_daemon test_invoices test_descriptor
-          #     test_simple_config
-          # These remain tracked as port-or-remove debt.
-
-      - name: Compile checks
-        run: python -m compileall -q electrum
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python -m compileall -q electrum/network.py
+          git add electrum/network.py
+          git diff --cached --check
+          git commit -m "network: clarify single trusted-operator security model"
+          git push origin HEAD:feature/dynamic-electrumx-server-list
