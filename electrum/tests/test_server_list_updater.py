@@ -8,10 +8,12 @@ from electrum import constants
 from electrum.server_list_updater import (
     CACHE_FILENAME,
     MAX_REMOTE_BYTES,
+    TRUSTED_ANCHOR_HOSTS,
     ServerListError,
     apply_remote_server_list,
     build_effective_server_list,
-    get_builtin_server_list,
+    get_builtin_anchor_list,
+    get_compiled_server_list,
     load_cached_remote_servers,
     parse_remote_server_list,
     sanitize_remote_server_list,
@@ -31,6 +33,19 @@ class TestDynamicServerList(unittest.TestCase):
         constants.RavencoinMainnet.DEFAULT_SERVERS = self.saved_mainnet_servers
         constants.set_mainnet()
 
+    def test_raventag_is_the_only_compiled_security_anchor(self):
+        anchors = get_builtin_anchor_list()
+        self.assertEqual({"electrumx.raventag.com"}, set(anchors))
+        self.assertEqual({"electrumx.raventag.com"}, set(TRUSTED_ANCHOR_HOSTS))
+        self.assertEqual("ALENOC", anchors["electrumx.raventag.com"]["operatorGroup"])
+
+        compiled = get_compiled_server_list()
+        self.assertIn("rvn4lyfe.com", compiled)  # discovery seed only
+        self.assertNotIn("operatorGroup", compiled["rvn4lyfe.com"])
+        onion = "aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion"
+        self.assertIn(onion, compiled)
+        self.assertNotIn("operatorGroup", compiled[onion])
+
     def test_remote_host_cannot_mint_operator_group(self):
         remote = {
             "new-electrum.example": {
@@ -46,13 +61,10 @@ class TestDynamicServerList(unittest.TestCase):
         effective = build_effective_server_list(remote)
         self.assertNotIn("operatorGroup", effective["new-electrum.example"])
 
-    def test_compiled_anchor_cannot_be_replaced_or_removed_remotely(self):
-        builtin = get_builtin_server_list()
-        self.assertIn("rvn4lyfe.com", builtin)
-        self.assertIn("electrumx.raventag.com", builtin)
-
+    def test_raventag_anchor_cannot_be_replaced_or_removed_remotely(self):
+        anchor = get_builtin_anchor_list()["electrumx.raventag.com"]
         remote = {
-            "rvn4lyfe.com": {
+            "electrumx.raventag.com": {
                 "s": "60000",
                 "operatorGroup": "attacker",
                 "version": "999",
@@ -61,14 +73,30 @@ class TestDynamicServerList(unittest.TestCase):
         }
         effective = build_effective_server_list(remote)
 
-        self.assertEqual(builtin["rvn4lyfe.com"], effective["rvn4lyfe.com"])
-        # Omission from the unsigned remote document cannot delete a compiled
-        # trust anchor either.
-        self.assertEqual(
-            builtin["electrumx.raventag.com"],
-            effective["electrumx.raventag.com"],
-        )
+        self.assertEqual(anchor, effective["electrumx.raventag.com"])
         self.assertIn("new-electrum.example", effective)
+
+        # Omission from the unsigned document cannot remove the anchor.
+        omitted = build_effective_server_list(
+            {"new-electrum.example": {"s": "50002"}}
+        )
+        self.assertEqual(anchor, omitted["electrumx.raventag.com"])
+
+    def test_non_anchor_compiled_seed_is_updateable_and_removable(self):
+        compiled = get_compiled_server_list()
+        self.assertEqual("50002", compiled["rvn4lyfe.com"]["s"])
+
+        updated = build_effective_server_list(
+            {"rvn4lyfe.com": {"s": "50003", "version": "1.12"}}
+        )
+        self.assertEqual("50003", updated["rvn4lyfe.com"]["s"])
+        self.assertNotIn("operatorGroup", updated["rvn4lyfe.com"])
+
+        removed = build_effective_server_list(
+            {"another-electrum.example": {"s": "50002"}}
+        )
+        self.assertNotIn("rvn4lyfe.com", removed)
+        self.assertIn("electrumx.raventag.com", removed)
 
     def test_remote_only_server_is_updateable_and_removable(self):
         first = build_effective_server_list(
@@ -120,6 +148,12 @@ class TestDynamicServerList(unittest.TestCase):
         self.assertNotIn(
             "operatorGroup",
             constants.RavencoinMainnet.DEFAULT_SERVERS["new-electrum.example"],
+        )
+        self.assertEqual(
+            "ALENOC",
+            constants.RavencoinMainnet.DEFAULT_SERVERS[
+                "electrumx.raventag.com"
+            ]["operatorGroup"],
         )
 
     def test_validated_cache_round_trip_and_tamper_rejection(self):
