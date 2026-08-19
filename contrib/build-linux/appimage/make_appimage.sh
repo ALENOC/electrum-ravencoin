@@ -37,8 +37,11 @@ info "downloading some dependencies."
 download_if_not_exist "$CACHEDIR/functions.sh" "https://raw.githubusercontent.com/AppImage/pkg2appimage/$PKG2APPIMAGE_COMMIT/functions.sh"
 verify_hash "$CACHEDIR/functions.sh" "8f67711a28635b07ce539a9b083b8c12d5488c00003d6d726c7b134e553220ed"
 
-download_if_not_exist "$CACHEDIR/appimagetool" "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage"
-verify_hash "$CACHEDIR/appimagetool" "df3baf5ca5facbecfc2f3fa6713c29ab9cefa8fd8c1eac5d283b79cab33e4acb"
+# AppImageKit's old release-13 asset is no longer available. Keep the
+# historical builder logic intact but pin the maintained appimagetool release
+# and verify it before use.
+download_if_not_exist "$CACHEDIR/appimagetool" "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+verify_hash "$CACHEDIR/appimagetool" "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
 
 download_if_not_exist "$CACHEDIR/Python-$PYTHON_VERSION.tar.xz" "https://www.python.org/ftp/python/$PYTHON_VERSION/Python-$PYTHON_VERSION.tar.xz"
 verify_hash "$CACHEDIR/Python-$PYTHON_VERSION.tar.xz" "3c3bc3048303721c904a03eb8326b631e921f11cc3be2988456a42f115daf04c"
@@ -101,7 +104,7 @@ XCB_UTIL_VERSION="acf790d7752f36e450d476ad79807d4012ec863b"
     mkdir "libxcb-util1"
     cd "libxcb-util1"
     if [ ! -d util ]; then
-        git clone --recursive "https://anongit.freedesktop.org/git/xcb/util"
+        git clone --recursive "https://gitlab.freedesktop.org/xorg/lib/libxcb-util.git" util
     fi
     cd util
     if ! $(git cat-file -e ${XCB_UTIL_VERSION}) ; then
@@ -278,19 +281,17 @@ info "creating the AppImage."
 (
     cd "$BUILDDIR"
     cp "$CACHEDIR/appimagetool" "$CACHEDIR/appimagetool_copy"
-    # zero out "appimage" magic bytes, as on some systems they confuse the linker
-    sed -i 's|AI\x02|\x00\x00\x00|' "$CACHEDIR/appimagetool_copy"
     chmod +x "$CACHEDIR/appimagetool_copy"
     "$CACHEDIR/appimagetool_copy" --appimage-extract
     # We build a small wrapper for mksquashfs that removes the -mkfs-time option
     # as it conflicts with SOURCE_DATE_EPOCH.
-    mv "$BUILDDIR/squashfs-root/usr/lib/appimagekit/mksquashfs" "$BUILDDIR/squashfs-root/usr/lib/appimagekit/mksquashfs_orig"
-    cat > "$BUILDDIR/squashfs-root/usr/lib/appimagekit/mksquashfs" << EOF
+    mv "$BUILDDIR/squashfs-root/usr/bin/mksquashfs" "$BUILDDIR/squashfs-root/usr/bin/mksquashfs_orig"
+    cat > "$BUILDDIR/squashfs-root/usr/bin/mksquashfs" << EOF
 #!/bin/sh
 args=\$(echo "\$@" | sed -e 's/-mkfs-time 0//')
-"$BUILDDIR/squashfs-root/usr/lib/appimagekit/mksquashfs_orig" \$args
+"$BUILDDIR/squashfs-root/usr/bin/mksquashfs_orig" \$args
 EOF
-    chmod +x "$BUILDDIR/squashfs-root/usr/lib/appimagekit/mksquashfs"
+    chmod +x "$BUILDDIR/squashfs-root/usr/bin/mksquashfs"
     env VERSION="$VERSION" ARCH=x86_64 ./squashfs-root/AppRun --no-appstream --verbose "$APPDIR" "$APPIMAGE"
 )
 

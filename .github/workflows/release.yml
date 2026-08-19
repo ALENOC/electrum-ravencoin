@@ -1,0 +1,251 @@
+name: Release build
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "electrum/version.py"
+      - "contrib/build-linux/**"
+      - "contrib/build-wine/**"
+      - "contrib/osx/**"
+      - "contrib/make_zbar.sh"
+      - "contrib/release_signing.py"
+      - "RELEASE_SIGNING.md"
+      - "RELEASE_NOTES_1.3.0rc2.md"
+  workflow_dispatch:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  # PR validation should follow the newest packaging commit. Tag builds must
+  # never be cancelled because they produce the release artifact set.
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  validate:
+    name: Validate release metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - id: version
+        name: Read and validate version
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(python3 contrib/print_electrum_version.py)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Electrum-Ravencoin version: $version"
+
+          if [[ "$REF_TYPE" == "tag" && "$REF_NAME" != "$version" ]]; then
+            echo "::error::release tag '$REF_NAME' must exactly match ELECTRUM_VERSION '$version'"
+            exit 1
+          fi
+
+          if [[ "$REF_TYPE" == "tag" && ! -f RELEASE_SIGNING_PUBKEY.json ]]; then
+            echo "::error::RELEASE_SIGNING_PUBKEY.json must be committed before creating a release tag"
+            exit 1
+          fi
+
+  source:
+    name: Source distribution
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Build deterministic source distribution
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./contrib/build-linux/sdist/build.sh
+          test -f "dist/Electrum-Ravencoin-${VERSION}.tar.gz"
+
+      - name: Upload source artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-source
+          path: dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  linux:
+    name: Linux x86_64 AppImage
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Build AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./contrib/build-linux/appimage/build.sh
+          compgen -G "dist/*.AppImage" >/dev/null
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-linux
+          path: dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows executables
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Build Windows binaries with deterministic Wine image
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./contrib/build-wine/build.sh
+          test "$(find contrib/build-wine/dist -maxdepth 1 -type f -name '*.exe' | wc -l)" -ge 3
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-windows
+          path: contrib/build-wine/dist/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  macos:
+    name: macOS x86_64 DMG
+    needs: validate
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Build unsigned macOS DMG
+        shell: bash
+        env:
+          CODESIGN_CERT: ""
+        run: |
+          set -euo pipefail
+          ./contrib/osx/make_osx.sh
+          compgen -G "dist/*.dmg" >/dev/null
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-macos
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  bundle:
+    name: Build release manifest
+    needs: [validate, source, linux, windows, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release-dist
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-dist
+          find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | while read -r file; do
+            sha256sum "$file"
+          done > SHA256SUMS
+          test -s SHA256SUMS
+          cat SHA256SUMS
+
+          if [[ -f ../RELEASE_SIGNING_PUBKEY.json ]]; then
+            cp ../RELEASE_SIGNING_PUBKEY.json .
+          fi
+
+      - name: Upload complete release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-bundle-${{ needs.validate.outputs.version }}
+          path: release-dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  draft-release:
+    name: Create draft GitHub release
+    if: github.ref_type == 'tag'
+    needs: [validate, bundle]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-bundle-${{ needs.validate.outputs.version }}
+          path: release-dist
+
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$VERSION" \
+            --verify-tag \
+            --draft \
+            --title "Electrum-Ravencoin $VERSION" \
+            --notes-file RELEASE_NOTES_1.3.0rc2.md \
+            release-dist/*
+
+          echo "Draft release created. Do not publish it until SHA256SUMS has been signed offline."
