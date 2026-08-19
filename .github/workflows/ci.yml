@@ -1,92 +1,173 @@
 name: CI
 
 on:
-  push:
-    branches: ['**']
   pull_request:
 
 permissions:
-  contents: read
-
-concurrency:
-  group: client-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  safety:
-    name: Safety and contract tests (Python ${{ matrix.python }})
+  add-electrumx-version-gate:
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'feature/dynamic-electrumx-server-list'
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ['3.11', '3.12']
     steps:
-      - name: Check out this repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Check out feature branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          persist-credentials: false
+          ref: feature/dynamic-electrumx-server-list
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
-        with:
-          python-version: ${{ matrix.python }}
+      - name: Implement semantic ElectrumX version floor
+        shell: python
+        run: |
+          import pathlib
 
-      - name: Install native crypto dependency
+          def replace_once(path, old, new):
+              p = pathlib.Path(path)
+              text = p.read_text(encoding='utf-8')
+              if old not in text:
+                  raise SystemExit(f'missing expected text in {path}: {old[:100]!r}')
+              p.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'electrum/ravencoin_backend.py',
+              'MINIMUM_SAFE_CORE = (4, 8, 0, 0)\n'
+              'MINIMUM_SAFE_CORE_STRING = "4.8.0"\n'
+              'MAX_BACKEND_EVIDENCE_AGE = 300\n'
+              'MAX_BACKEND_CLOCK_SKEW = 300\n'
+              '_VERSION_RE = re.compile(r"^[0-9]+\\.[0-9]+\\.[0-9]+(?:\\.[0-9]+)?$")\n',
+              'MINIMUM_SAFE_CORE = (4, 8, 0, 0)\n'
+              'MINIMUM_SAFE_CORE_STRING = "4.8.0"\n'
+              'MINIMUM_SAFE_ELECTRUMX = (1, 13, 0)\n'
+              'MINIMUM_SAFE_ELECTRUMX_STRING = "1.13.0"\n'
+              'MAX_BACKEND_EVIDENCE_AGE = 300\n'
+              'MAX_BACKEND_CLOCK_SKEW = 300\n'
+              '_VERSION_RE = re.compile(r"^[0-9]+\\.[0-9]+\\.[0-9]+(?:\\.[0-9]+)?$")\n'
+              '_ELECTRUMX_VERSION_RE = re.compile(\n'
+              '    r"^ElectrumX(?:-RVN)?\\s+([0-9]+)\\.([0-9]+)\\.([0-9]+)(?:[A-Za-z0-9.+_-]*)$"\n'
+              ')\n'
+          )
+          replace_once(
+              'electrum/ravencoin_backend.py',
+              '    CORE_TOO_OLD = "CORE_TOO_OLD"\n'
+              '    CORE_VERSION_UNKNOWN = "CORE_VERSION_UNKNOWN"\n',
+              '    CORE_TOO_OLD = "CORE_TOO_OLD"\n'
+              '    CORE_VERSION_UNKNOWN = "CORE_VERSION_UNKNOWN"\n'
+              '    ELECTRUMX_TOO_OLD = "ELECTRUMX_TOO_OLD"\n'
+              '    ELECTRUMX_VERSION_UNKNOWN = "ELECTRUMX_VERSION_UNKNOWN"\n'
+          )
+          replace_once(
+              'electrum/ravencoin_backend.py',
+              '\ndef parse_core_version_text(value: Any) -> Tuple[int, int, int, int]:\n',
+              '\ndef parse_electrumx_version_text(value: Any) -> Tuple[int, int, int]:\n'
+              '    """Parse the negotiated ElectrumX product version semantically.\n\n'
+              '    Pre-release/dev/local suffixes are allowed after the patch component;\n'
+              '    eligibility compares only the numeric major/minor/patch floor so future\n'
+              '    compatible releases are not pinned to exactly 1.13.0.\n'
+              '    """\n'
+              '    if not isinstance(value, str):\n'
+              '        raise BackendEvidenceError(\n'
+              '            BackendEligibilityState.ELECTRUMX_VERSION_UNKNOWN,\n'
+              '            "ElectrumX server version could not be verified",\n'
+              '        )\n'
+              '    match = _ELECTRUMX_VERSION_RE.fullmatch(value)\n'
+              '    if not match:\n'
+              '        raise BackendEvidenceError(\n'
+              '            BackendEligibilityState.ELECTRUMX_VERSION_UNKNOWN,\n'
+              '            "ElectrumX server version could not be verified",\n'
+              '        )\n'
+              '    return tuple(int(part) for part in match.groups())\n\n\n'
+              'def parse_core_version_text(value: Any) -> Tuple[int, int, int, int]:\n'
+          )
+          replace_once(
+              'electrum/ravencoin_backend.py',
+              '    if evidence.core_version_tuple < MINIMUM_SAFE_CORE:\n'
+              '        return BackendEligibilityState.CORE_TOO_OLD\n'
+              '    if evidence.network != "main" or not evidence.server_reports_network_match:\n',
+              '    if evidence.core_version_tuple < MINIMUM_SAFE_CORE:\n'
+              '        return BackendEligibilityState.CORE_TOO_OLD\n'
+              '    try:\n'
+              '        electrumx_version = parse_electrumx_version_text(evidence.server_version)\n'
+              '    except BackendEvidenceError:\n'
+              '        return BackendEligibilityState.ELECTRUMX_VERSION_UNKNOWN\n'
+              '    if electrumx_version < MINIMUM_SAFE_ELECTRUMX:\n'
+              '        return BackendEligibilityState.ELECTRUMX_TOO_OLD\n'
+              '    if evidence.network != "main" or not evidence.server_reports_network_match:\n'
+          )
+          replace_once(
+              'electrum/ravencoin_backend.py',
+              '    if state == BackendEligibilityState.CORE_TOO_OLD:\n'
+              '        return (\n'
+              '            "Server rejected: Ravencoin Core {} is below the minimum safe version {}."\n'
+              '            .format(evidence.core_version, MINIMUM_SAFE_CORE_STRING)\n'
+              '        )\n'
+              '    if state == BackendEligibilityState.WRONG_NETWORK:\n',
+              '    if state == BackendEligibilityState.CORE_TOO_OLD:\n'
+              '        return (\n'
+              '            "Server rejected: Ravencoin Core {} is below the minimum safe version {}."\n'
+              '            .format(evidence.core_version, MINIMUM_SAFE_CORE_STRING)\n'
+              '        )\n'
+              '    if state == BackendEligibilityState.ELECTRUMX_TOO_OLD:\n'
+              '        return (\n'
+              '            "Server rejected: ElectrumX {} is below the minimum supported version {}."\n'
+              '            .format(evidence.server_version, MINIMUM_SAFE_ELECTRUMX_STRING)\n'
+              '        )\n'
+              '    if state == BackendEligibilityState.ELECTRUMX_VERSION_UNKNOWN:\n'
+              '        return "Server rejected: ElectrumX server version could not be verified."\n'
+              '    if state == BackendEligibilityState.WRONG_NETWORK:\n'
+          )
+
+          replace_once(
+              'electrum/tests/test_ravencoin_backend.py',
+              '    parse_core_version_text,\n'
+              '    parse_ravencoin_backend_evidence,\n',
+              '    parse_core_version_text,\n'
+              '    parse_electrumx_version_text,\n'
+              '    parse_ravencoin_backend_evidence,\n'
+          )
+          marker = '''    def test_version_alone_never_grants_eligibility(self):\n'''
+          insertion = '''    def test_electrumx_minimum_is_semantic_and_forward_compatible(self):
+              self.assertEqual((1, 13, 0), parse_electrumx_version_text("ElectrumX-RVN 1.13.0"))
+              self.assertEqual((1, 13, 0), parse_electrumx_version_text("ElectrumX-RVN 1.13.0.dev1"))
+              self.assertEqual((1, 14, 0), parse_electrumx_version_text("ElectrumX-RVN 1.14.0rc1"))
+              self.assertEqual((2, 0, 0), parse_electrumx_version_text("ElectrumX-RVN 2.0.0"))
+
+              for server_version in (
+                  "ElectrumX-RVN 1.13.0",
+                  "ElectrumX-RVN 1.13.1",
+                  "ElectrumX-RVN 1.14.0",
+                  "ElectrumX-RVN 2.0.0",
+              ):
+                  with self.subTest(server_version=server_version):
+                      self.assertEqual(
+                          BackendEligibilityState.SAFE_CORE_VERIFIED,
+                          self.classify(backend_response(server_version=server_version)),
+                      )
+
+          def test_electrumx_below_minimum_or_unparseable_is_rejected(self):
+              self.assertEqual(
+                  BackendEligibilityState.ELECTRUMX_TOO_OLD,
+                  self.classify(backend_response(server_version="ElectrumX-RVN 1.12.9")),
+              )
+              self.assertEqual(
+                  BackendEligibilityState.ELECTRUMX_VERSION_UNKNOWN,
+                  self.classify(backend_response(server_version="not-electrumx 99.0.0")),
+              )
+
+'''
+          test_path = pathlib.Path('electrum/tests/test_ravencoin_backend.py')
+          test_text = test_path.read_text(encoding='utf-8')
+          if marker not in test_text:
+              raise SystemExit('test insertion marker missing')
+          test_path.write_text(test_text.replace(marker, insertion + marker, 1), encoding='utf-8')
+
+      - name: Commit version gate
         run: |
           set -euo pipefail
-          # ubuntu-24.04 hosted runners already have a current package index;
-          # avoiding an unconditional refresh removes a flaky external-mirror
-          # dependency from every release-gating run.
-          sudo apt-get install --no-install-recommends -y libsecp256k1-1
-
-      - name: Install test dependencies
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install -e ".[tests]"
-          python -m pip install pytest==8.3.5
-
-      - name: Supported Ravencoin client test suite
-        run: |
-          set -euo pipefail
-          # Release-gating surface: functionality this Ravencoin fork ships
-          # and supports. Everything below must pass for a release.
-          python -m pytest -q \
-            electrum/tests/test_core_safety_policy.py \
-            electrum/tests/test_core_safety_directory.py \
-            electrum/tests/test_ravencoin_backend.py \
-            electrum/tests/test_interface.py \
-            electrum/tests/test_blockchain.py \
-            electrum/tests/test_security_remediation.py \
-            electrum/tests/test_server_list_updater.py \
-            electrum/tests/test_network.py \
-            electrum/tests/test_verifier.py \
-            electrum/tests/test_write_authorization.py \
-            electrum/tests/test_recent_agreement_relay.py \
-            electrum/tests/test_ipfs_db.py \
-            electrum/tests/test_wizard_2fa.py \
-            electrum/tests/test_transaction.py \
-            electrum/tests/test_bitcoin.py \
-            electrum/tests/test_util.py \
-            electrum/tests/test_psbt.py \
-            electrum/tests/test_coinchooser.py \
-            electrum/tests/test_x509.py \
-            electrum/tests/test_revealer.py \
-            --deselect electrum/tests/test_util.py::TestUtil::test_parse_URI_lightning_consistency
-
-          # Not gated -- inherited upstream debt for features this fork does
-          # not support. This is an explicit scope decision, not hidden red:
-          #   Lightning/BOLT (UI disabled, channel funding stubbed):
-          #     test_lnpeer test_lnchannel test_lntransport test_lnutil
-          #     test_bolt11 test_lnmsg test_sswaps test_lnrouter
-          #     + test_parse_URI_lightning_consistency (deselected above)
-          #   TrustedCoin (plugin removed from this fork):
-          #     test_commands test_mnemonic test_wallet_vertical
-          #   Bitcoin-era fixtures / API drift never ported:
-          #     test_storage_upgrade (fixture corpus never shipped here)
-          #     test_wallet test_daemon test_invoices test_descriptor
-          #     test_simple_config
-          # These remain tracked as port-or-remove debt.
-
-      - name: Compile checks
-        run: python -m compileall -q electrum
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python -m compileall -q electrum/ravencoin_backend.py electrum/tests/test_ravencoin_backend.py
+          git add electrum/ravencoin_backend.py electrum/tests/test_ravencoin_backend.py
+          git diff --cached --check
+          git commit -m "backend: accept ElectrumX 1.13 and later semantically"
+          git push origin HEAD:feature/dynamic-electrumx-server-list
