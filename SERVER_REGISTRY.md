@@ -7,11 +7,14 @@ The wallet has two server-directory channels with intentionally different trust 
 
 ## Trust root
 
-The client embeds only the public Ed25519 registry key. The current key ID is:
+The client embeds only the public Ed25519 registry key. The current production trust root is:
 
-`d7a50f481a496f3e`
+- key ID: `d7a50f481a496f3e`
+- raw public key: `f15e00d3e5edb0d9db31f81171a5e8716e247b53bc0e120655f665ba54b0d0c0`
 
-The private key must remain outside the repository, CI, release artifacts, cloud drives, issue attachments, and application data directories. Losing or compromising this private key requires a client release that rotates the embedded public trust root.
+The matching private key is **not part of the Git repository**. For the maintainer checkout it may be stored locally at `.server-registry-key/server-registry-ed25519-private.pem`; the whole `.server-registry-key/` directory is ignored by `.gitignore` and must never be force-added, committed, pushed, attached to issues, copied into CI/release artifacts, or placed in application data.
+
+Recommended local permissions are `0700` on `.server-registry-key/` and `0600` on the private-key file. Keep a separate offline backup of the private key in a protected location. Losing or compromising the private key requires a client release that rotates the embedded public trust root.
 
 The server-registry key is deliberately different from the Ravencoin Core safety-policy signing key. Compromise of one signing role must not automatically compromise the other.
 
@@ -31,21 +34,27 @@ The maintained RavenTag deployment currently uses **ElectrumX-RVN 1.13.x** as it
 
 ## Updating the registry
 
+The currently committed registry is version **2**. Every future signed publication must use a strictly higher `registryVersion`; never reuse a version number for different contents.
+
 1. Edit `electrum/servers.json` to the intended directory. `operatorGroup` should be present only on operators that have actually been reviewed and are intended to be trusted.
-2. Increment `registryVersion`. Never reuse an old version number for different contents.
-3. From a trusted/offline machine, sign the directory with:
+2. Choose the next strictly increasing registry version. For the next update after v2, use v3.
+3. From the trusted signing checkout, confirm that `.server-registry-key/` is ignored by Git and that the private-key permissions remain restricted.
+4. Sign the directory. The signer is intentionally standalone and requires only Python plus `cryptography`; it does not initialize the Electrum wallet/network stack.
 
 ```bash
+git check-ignore -v .server-registry-key/server-registry-ed25519-private.pem
+
 python3 contrib/sign_server_registry.py \
-  --key /secure/offline/server-registry-ed25519-private.pem \
-  --registry-version 2 \
-  --expires-days 180
+  --key .server-registry-key/server-registry-ed25519-private.pem \
+  --registry-version 3 \
+  --expires-days 365
 ```
 
-4. Review both `electrum/servers.json` and `electrum/servers.signed.json` before committing.
-5. Let CI pass before publishing the change to `master`.
+5. Review both `electrum/servers.json` and `electrum/servers.signed.json`. Confirm the expected `registryVersion`, `keyId`, expiry, and server/operator assignments before committing.
+6. Verify that `.server-registry-key/` does not appear in `git status` and never use `git add -f` on the private key.
+7. Let the release-gating CI pass before publishing the registry change to `master`.
 
-Already-built clients poll the signed registry and accept a newer registry only when the Ed25519 signature is valid, the document is not expired, and `registryVersion` is not below the highest version already accepted locally.
+Already-built clients poll the signed registry and accept a newer registry only when the Ed25519 signature is valid, the document is not expired, and `registryVersion` is not below the highest version already accepted locally. A same-version document with different signed contents is rejected as equivocation.
 
 ## Failure behavior
 

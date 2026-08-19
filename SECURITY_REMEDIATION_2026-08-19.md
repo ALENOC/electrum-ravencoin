@@ -40,32 +40,70 @@ a successful unlock. BIE2 hardware-derived storage remains compatible.
 
 ## Production operator anchor policy
 
-`electrumx.raventag.com:50002` is the only compiled server entry currently
-trusted with an `operatorGroup` (`ALENOC`). It is operator-controlled and is
-expected to run Ravencoin Core 4.8.0 with ElectrumX 1.13; the live backend and
-chain gates remain authoritative and directory metadata alone never authorizes
-it.
+`electrumx.raventag.com:50002` is the sole compiled server entry currently
+trusted with an `operatorGroup` (`ALENOC`). Directory metadata does not bypass
+live validation: the interface must still satisfy the TLS, Ravencoin backend,
+Core safety-policy, chain-validation, and readiness gates before it can authorize
+trusted chain-dependent actions.
+
+RavenTag's maintained deployment baseline is Ravencoin Core **4.8.0 or later**
+and ElectrumX-RVN **1.13.x**. Core releases newer than 4.8.0 are not trusted
+merely because their version number is higher: the exact release identity must
+also be accepted by the separately signed Core safety policy. ElectrumX is not
+hard-pinned to the exact `1.13.0` product-version string; later compatible
+ElectrumX-RVN releases may be used when they negotiate the supported Electrum
+protocol and continue to provide the required Ravencoin backend capability
+contract.
 
 The `rvn4lyfe` clearnet/onion endpoints are discovery-only and deliberately do
-not carry `operatorGroup`. Consequently the two-independent-operator quorum is
-currently unavailable in the shipped directory: sensitive writes and promotion
-of remote data into verified wallet state fail closed until a second independently
-trusted operator anchor (or a cryptographically signed server registry) is added.
-This is an intentional safety-over-availability choice.
+not carry `operatorGroup`. Their presence or absence does not satisfy, weaken,
+or raise the trusted-operator threshold. With the current policy, **one**
+authenticated and individually validated trusted operator is sufficient for
+normal wallet operation. If a future signed registry introduces a second
+independently operated trusted group, agreement provides stronger assurance;
+any disagreement between trusted groups still fails closed.
+
+## Signed server registry
+
+Security-sensitive server trust metadata is distributed through
+`electrum/servers.signed.json`, authenticated by the dedicated Ed25519 registry
+trust root. The current production key ID is `d7a50f481a496f3e`, and the
+committed registry is version 2.
+
+A valid signed registry may add, update, or remove servers and may assign or
+remove `operatorGroup` values without requiring an already-released wallet to be
+rebuilt. The registry path enforces signature verification, expiry, monotonic
+`registryVersion`, local high-water rollback protection, and rejection of
+same-version/different-content equivocation.
+
+The signing private key is never tracked by Git. The maintainer checkout may keep
+it in the gitignored `.server-registry-key/` directory for signing, with a
+separate protected offline backup. Operational details are documented in
+`SERVER_REGISTRY.md`.
 
 ## Dynamic server directory
 
-Already-built clients can refresh ordinary ElectrumX discovery entries from the
-repository at runtime. The unsigned remote list may add, update, or remove
-non-anchor servers, but it cannot replace the RavenTag anchor and any remote
-`operatorGroup` field is discarded. A validated cache is used as fallback, with
-the compiled directory remaining the startup fallback when no cache exists.
+Already-built clients can refresh the server directory at runtime through two
+separate trust channels. The signed registry is authoritative for authenticated
+operator metadata after all signature/expiry/rollback checks pass. The unsigned
+`electrum/servers.json` channel is discovery-only: it may add, update, or remove
+ordinary endpoints, but remote `operatorGroup` fields are stripped and cannot
+mint trusted operators.
+
+If no valid signed registry is available, the client retains the compiled
+RavenTag trusted anchor and may use validated unsigned discovery data for other
+endpoints. A still-valid cached signed registry is not downgraded merely because
+a refresh temporarily fails.
 
 ## Regression coverage
 
 `electrum/tests/test_security_remediation.py` covers the PoW downgrade guard,
 read-chain authorization, verified-state quarantine, TLS first-contact policy,
-backend-claim semantics, BIE3/scrypt migration and the RavenTag-only production
-operator policy. `electrum/tests/test_server_list_updater.py` covers the runtime
-directory update trust boundary, validation, cache integrity and anchor
-immutability. Both are part of the release-gating CI test surface.
+backend-claim semantics, BIE3/scrypt migration and the RavenTag-only compiled
+operator policy. `electrum/tests/test_server_list_updater.py` covers unsigned
+trust stripping, RavenTag fallback behavior, signed-registry signature/tamper/
+expiry/rollback/equivocation handling, the embedded registry key, and the
+committed signed registry. `electrum/tests/test_write_authorization.py` and
+`electrum/tests/test_recent_agreement_relay.py` cover the single-trusted-operator
+availability model plus fail-closed conflicts when multiple trusted groups are
+present. These tests are part of the release-gating CI surface.
