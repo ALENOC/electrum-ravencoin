@@ -33,18 +33,18 @@ HONEST_HASH = "aa" * 32
 FABRICATED_HASH = "bb" * 32
 
 FIXTURE_SERVERS = {
-    "cipig-a.example": {"operatorGroup": "CIPIG"},
-    "cipig-b.example": {"operatorGroup": "CIPIG"},
-    "cipig-c.example": {"operatorGroup": "CIPIG"},
-    "alenoc-a.example": {"operatorGroup": "ALENOC"},
-    "alenoc-b.example": {"operatorGroup": "ALENOC"},
-    "independent.example": {"operatorGroup": "INDEPENDENT_OP"},
-    "no-metadata.example": {},
+    "cipig-a.example": {"s": "50002", "operatorGroup": "CIPIG"},
+    "cipig-b.example": {"s": "50002", "operatorGroup": "CIPIG"},
+    "cipig-c.example": {"s": "50002", "operatorGroup": "CIPIG"},
+    "alenoc-a.example": {"s": "50002", "operatorGroup": "ALENOC"},
+    "alenoc-b.example": {"s": "50002", "operatorGroup": "ALENOC"},
+    "independent.example": {"s": "50002", "operatorGroup": "INDEPENDENT_OP"},
+    "no-metadata.example": {"s": "50002"},
 }
 
 
-def _server(host: str) -> ServerAddr:
-    return ServerAddr.from_str(f"{host}:50001:t")
+def _server(host: str, *, port: int = 50002, protocol: str = "s") -> ServerAddr:
+    return ServerAddr(host, port, protocol=protocol)
 
 
 def _safe_interface(
@@ -101,6 +101,20 @@ class TestOperatorGroupForServer(ElectrumTestCase):
         with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
             self.assertIsNone(
                 operator_group_for_server(_server("totally-unknown.example"))
+            )
+
+    def test_known_operator_wrong_tls_port_returns_none(self):
+        with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
+            self.assertIsNone(
+                operator_group_for_server(_server("cipig-a.example", port=50003))
+            )
+
+    def test_known_operator_plaintext_endpoint_returns_none(self):
+        with patch.object(constants.net, "DEFAULT_SERVERS", FIXTURE_SERVERS):
+            self.assertIsNone(
+                operator_group_for_server(
+                    _server("cipig-a.example", port=50001, protocol="t")
+                )
             )
 
     def test_known_server_missing_operator_group_key_returns_none(self):

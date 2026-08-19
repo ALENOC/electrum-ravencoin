@@ -11,10 +11,12 @@ servers.
 > `2miners/Ravencoin` `v4.8.0` at commit
 > `b60f50e04f1fba425b28804e61be2694faaf3469`.
 
-Wallet files, seed generation, private-key handling, transaction signing,
-hardware-wallet support and wallet cryptography remain unchanged by this
-maintenance fork. This is a community-maintained fork, not a release by the
-Ravencoin Foundation or the original Electrum maintainers.
+Seed generation, private-key handling, transaction signing and hardware-wallet
+signing remain unchanged by this maintenance fork. Human-password wallet-file
+encryption is strengthened to BIE3/scrypt with automatic migration from legacy
+BIE1 after a successful unlock; BIE2 hardware-derived storage remains compatible.
+This is a community-maintained fork, not a release by the Ravencoin Foundation or
+the original Electrum maintainers.
 
 ## Why this maintained wallet exists
 
@@ -26,9 +28,9 @@ certified baseline is documented in the [server's incident and certification
 guides](https://github.com/ALENOC/electrumx-ravencoin/tree/master/docs).
 
 If this is your first time using the wallet, you can use an existing wallet
-file and seed with the maintained fork; the security boundary is the server
-selection and chain-evidence checks, not a new wallet format or replacement
-cryptography.
+file and seed with the maintained fork. Existing wallet data and seed/signing
+semantics remain compatible; a legacy BIE1 password-encrypted file is upgraded
+to the BIE3/scrypt encryption envelope after a successful unlock.
 
 ## Documentation
 

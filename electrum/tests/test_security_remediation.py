@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 from electrum import constants
 from electrum.address_synchronizer import AddressSynchronizer
 from electrum.blockchain import Blockchain, InvalidHeader
-from electrum.interface import ErrorGettingSSLCertFromServer, Interface
+from electrum.interface import ErrorGettingSSLCertFromServer, Interface, ServerAddr
 from electrum.network import Network, WriteAuthorization, WriteAuthorizationState
 from electrum.ravencoin_backend import BackendEligibilityState
 from electrum.storage import (
@@ -188,7 +188,7 @@ class TestVerifiedReadAuthorization(unittest.TestCase):
         iface = Mock()
         iface.is_connected_and_ready = Mock(return_value=True)
         iface.is_safe_ravencoin_mainnet_endpoint = True
-        iface.server.host = "read.example"
+        iface.server = ServerAddr.from_str("read.example:50002:s")
         iface.blockchain.height = Mock(return_value=101)
         iface.blockchain.get_hash = Mock(side_effect=lambda h: f"{h:064x}")
         return iface
@@ -199,7 +199,7 @@ class TestVerifiedReadAuthorization(unittest.TestCase):
         iface = self.interface()
         old_servers = constants.net.DEFAULT_SERVERS
         try:
-            constants.net.DEFAULT_SERVERS = {"read.example": {"operatorGroup": "READ_OP"}}
+            constants.net.DEFAULT_SERVERS = {"read.example": {"s": "50002", "operatorGroup": "READ_OP"}}
             self.assertEqual(
                 WriteAuthorizationState.AUTHORIZED,
                 net.get_verified_read_authorization(iface, required_height=100).state,
@@ -218,7 +218,7 @@ class TestVerifiedReadAuthorization(unittest.TestCase):
         iface = self.interface()
         old_servers = constants.net.DEFAULT_SERVERS
         try:
-            constants.net.DEFAULT_SERVERS = {"read.example": {"operatorGroup": "READ_OP"}}
+            constants.net.DEFAULT_SERVERS = {"read.example": {"s": "50002", "operatorGroup": "READ_OP"}}
             self.assertEqual(
                 WriteAuthorizationState.STALE_CHAIN_EVIDENCE,
                 net.get_verified_read_authorization(iface, required_height=102).state,

@@ -202,6 +202,77 @@ class TestPolicyStore(ElectrumTestCase):
             policy.TRUSTED_POLICY_KEYS.clear()
             policy.TRUSTED_POLICY_KEYS.update(original)
 
+    def test_same_version_same_document_is_idempotent(self):
+        private_key, trusted, key_id = keypair()
+        original = dict(policy.TRUSTED_POLICY_KEYS)
+        policy.TRUSTED_POLICY_KEYS.update(trusted)
+        try:
+            with tempfile.TemporaryDirectory() as cache_dir:
+                store = policy.PolicyStore(cache_dir)
+                document = sign(private_key, key_id, body(version=8))
+                store.accept_remote(document)
+                store.accept_remote(document)
+                self.assertEqual(8, store.policy_version)
+        finally:
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS.update(original)
+
+    def test_same_version_different_signed_contents_are_refused(self):
+        private_key, trusted, key_id = keypair()
+        original = dict(policy.TRUSTED_POLICY_KEYS)
+        policy.TRUSTED_POLICY_KEYS.update(trusted)
+        try:
+            with tempfile.TemporaryDirectory() as cache_dir:
+                store = policy.PolicyStore(cache_dir)
+                first = sign(private_key, key_id, body(version=8))
+                revoked = dict(safe_entry())
+                revoked.update({"status": "REVOKED", "revocationReason": "test"})
+                revoked.pop("certification")
+                second = sign(
+                    private_key, key_id, body(version=8, releases=[revoked])
+                )
+                store.accept_remote(first)
+                with self.assertRaises(policy.PolicyError):
+                    store.accept_remote(second)
+        finally:
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS.update(original)
+
+    def test_same_version_different_cached_contents_are_ignored(self):
+        private_key, trusted, key_id = keypair()
+        original = dict(policy.TRUSTED_POLICY_KEYS)
+        policy.TRUSTED_POLICY_KEYS.update(trusted)
+        try:
+            with tempfile.TemporaryDirectory() as cache_dir:
+                store = policy.PolicyStore(cache_dir)
+                first = sign(
+                    private_key,
+                    key_id,
+                    body(
+                        version=9,
+                        releases=[
+                            safe_entry(),
+                            safe_entry(commit=OTHER_COMMIT, version="4.9.0"),
+                        ],
+                    ),
+                )
+                store.accept_remote(first)
+                second = sign(private_key, key_id, body(version=9))
+                with open(
+                    os.path.join(cache_dir, policy.POLICY_CACHE_FILENAME), "w"
+                ) as handle:
+                    json.dump(second, handle)
+                reopened = policy.PolicyStore(cache_dir)
+                self.assertEqual(9, reopened.policy_version)
+                self.assertIsNone(
+                    policy.lookup(
+                        reopened.effective(), "2miners/Ravencoin", OTHER_COMMIT
+                    )
+                )
+        finally:
+            policy.TRUSTED_POLICY_KEYS.clear()
+            policy.TRUSTED_POLICY_KEYS.update(original)
+
     def test_replaying_an_older_policy_after_revocation_is_refused(self):
         private_key, trusted, key_id = keypair()
         original = dict(policy.TRUSTED_POLICY_KEYS)

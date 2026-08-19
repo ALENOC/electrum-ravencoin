@@ -345,6 +345,10 @@ class TestDynamicServerList(unittest.TestCase):
             sanitize_signed_server_list(
                 {"new.example": {"s": "50002", "operatorGroup": "bad\nvalue"}}
             )
+        with self.assertRaises(ServerListError):
+            sanitize_signed_server_list(
+                {"new.example": {"t": "50001", "operatorGroup": "OPERATOR"}}
+            )
 
     def test_remote_response_size_is_bounded(self):
         oversized = " " * (MAX_REMOTE_BYTES + 1)
