@@ -177,6 +177,10 @@ def _sanitize_server_list(value: Any, *, allow_operator_groups: bool) -> Dict[st
         if allow_operator_groups:
             group = _validate_optional_text(raw_entry, "operatorGroup", max_len=128)
             if group is not None:
+                if "s" not in entry:
+                    raise ServerListError(
+                        f"operatorGroup for {host!r} requires a TLS ('s') endpoint"
+                    )
                 entry["operatorGroup"] = group
         # SECURITY: unsigned callers never copy raw_entry["operatorGroup"].
 

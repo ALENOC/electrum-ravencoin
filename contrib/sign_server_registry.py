@@ -183,6 +183,10 @@ def sanitize_signed_server_list(value: Any) -> Dict[str, dict]:
 
         group = _validate_optional_text(raw_entry, "operatorGroup", max_len=128)
         if group is not None:
+            if "s" not in entry:
+                raise SystemExit(
+                    f"operatorGroup for {host!r} requires a TLS ('s') endpoint"
+                )
             entry["operatorGroup"] = group
 
         sanitized[host] = entry

@@ -73,18 +73,18 @@ def spoofed_chain(spoof_height: int, spoof_hash: str):
 
 
 FIXTURE_SERVERS = {
-    "a1.example": {"operatorGroup": "OP_A"},
-    "a2.example": {"operatorGroup": "OP_A"},
-    "b1.example": {"operatorGroup": "OP_B"},
-    "c1.example": {"operatorGroup": "OP_C"},
-    "evil1.example": {"operatorGroup": "OP_EVIL"},
-    "unknown.example": {},  # listed without operator metadata
+    "a1.example": {"s": "50002", "operatorGroup": "OP_A"},
+    "a2.example": {"s": "50002", "operatorGroup": "OP_A"},
+    "b1.example": {"s": "50002", "operatorGroup": "OP_B"},
+    "c1.example": {"s": "50002", "operatorGroup": "OP_C"},
+    "evil1.example": {"s": "50002", "operatorGroup": "OP_EVIL"},
+    "unknown.example": {"s": "50002"},  # listed without operator metadata
     # "not-listed.example" intentionally absent: stands in for a manual server
 }
 
 
 def _server(host: str) -> ServerAddr:
-    return ServerAddr.from_str(f"{host}:50001:t")
+    return ServerAddr.from_str(f"{host}:50002:s")
 
 
 def make_iface(host, *, chain=honest_hash, height=H, tip=None, safe=True,
@@ -489,7 +489,7 @@ class TestRelayTargetBinding(unittest.IsolatedAsyncioTestCase):
 
     async def test_relay_selection_independent_of_insertion_order(self):
         from electrum.interface import ServerAddr as _SA
-        expected = _SA.from_str("a1.example:50001:t")  # lexical minimum participant
+        expected = _SA.from_str("a1.example:50002:s")  # lexical minimum participant
         relays = set()
         for hosts in [("a1.example", "b1.example"), ("b1.example", "a1.example")]:
             net = make_net(*[make_iface(h) for h in hosts])

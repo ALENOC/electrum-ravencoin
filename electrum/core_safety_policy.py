@@ -69,6 +69,10 @@ def _canonical_bytes(body: dict) -> bytes:
         ensure_ascii=True).encode("utf-8")
 
 
+def _policy_digest(body: dict) -> str:
+    return hashlib.sha256(_canonical_bytes(body)).hexdigest()
+
+
 def _identity(entry: dict) -> Tuple[str, str]:
     return entry["repository"], entry["commit"]
 
@@ -235,12 +239,26 @@ class PolicyStore(Logger):
         self._baseline = load_baseline()
         self._remote: Optional[dict] = None
         self._high_water = int(self._baseline["policyVersion"])
+        self._high_water_digest: Optional[str] = None
         if cache_dir:
-            self._high_water = max(self._high_water, self._load_high_water())
+            state_version, state_digest = self._load_high_water()
+            if state_version > self._high_water:
+                self._high_water = state_version
+                self._high_water_digest = state_digest
+            elif state_version == self._high_water and state_digest is not None:
+                self._high_water_digest = state_digest
             self._remote = self._load_cache()
             if self._remote is not None:
-                self._high_water = max(self._high_water,
-                                       int(self._remote["policyVersion"]))
+                remote_version = int(self._remote["policyVersion"])
+                remote_digest = _policy_digest(self._remote)
+                if remote_version > self._high_water:
+                    self._high_water = remote_version
+                    self._high_water_digest = remote_digest
+                elif (
+                    remote_version == self._high_water
+                    and self._high_water_digest is None
+                ):
+                    self._high_water_digest = remote_digest
 
     # ------------------------------------------------------------------ cache
     @property
@@ -255,21 +273,43 @@ class PolicyStore(Logger):
             return None
         return os.path.join(self.cache_dir, POLICY_STATE_FILENAME)
 
-    def _load_high_water(self) -> int:
-        """Read the newest version ever accepted, surviving a lost cache."""
+    def _load_high_water(self) -> Tuple[int, Optional[str]]:
+        """Read accepted version and digest, surviving a lost policy cache.
+
+        A malformed or missing digest must not lower the version floor. It only
+        removes same-version equivocation detection until a valid state is
+        written again; an attacker able to erase all local state is already at
+        the documented local anti-rollback boundary.
+        """
         path = self._state_path
         if not path or not os.path.exists(path):
-            return 0
+            return 0, None
         try:
             with open(path, "r", encoding="utf-8") as handle:
                 state = json.load(handle)
             version = state.get("policyVersion")
-            if isinstance(version, int) and not isinstance(version, bool) \
-                    and version > 0:
-                return version
+            if (
+                isinstance(version, int)
+                and not isinstance(version, bool)
+                and version > 0
+            ):
+                digest = state.get("policyDigest")
+                if digest is None:
+                    return version, None
+                if isinstance(digest, str) and len(digest) == 64:
+                    try:
+                        int(digest, 16)
+                    except ValueError:
+                        pass
+                    else:
+                        return version, digest.lower()
+                self.logger.info(
+                    "policy state has an invalid digest; preserving version floor"
+                )
+                return version, None
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             self.logger.info(f"ignoring unreadable policy state: {exc}")
-        return 0
+        return 0, None
 
     def _write_high_water(self, body: dict, signature: dict) -> None:
         path = self._state_path
@@ -280,7 +320,7 @@ class PolicyStore(Logger):
             "acceptedAt": int(time.time()),
             "keyId": signature.get("keyId"),
             "algorithm": signature.get("algorithm"),
-            "policyDigest": hashlib.sha256(_canonical_bytes(body)).hexdigest(),
+            "policyDigest": _policy_digest(body),
             "safetyProfile": body.get("safetyProfile"),
         }
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -316,6 +356,16 @@ class PolicyStore(Logger):
                 raise PolicyError(
                     f"cached policy targets profile {body['safetyProfile']!r} but "
                     f"this wallet requires {REQUIRED_SAFETY_PROFILE!r}")
+            digest = _policy_digest(body)
+            if (
+                int(body["policyVersion"]) == self._high_water
+                and self._high_water_digest is not None
+                and digest != self._high_water_digest
+            ):
+                raise PolicyError(
+                    "same policyVersion has different signed contents; "
+                    "refusing equivocation"
+                )
             return body
         except (OSError, json.JSONDecodeError, PolicyError) as exc:
             self.logger.info(f"ignoring cached safe-Core policy: {exc}")
@@ -360,8 +410,23 @@ class PolicyStore(Logger):
                 raise PolicyError(
                     f"policy targets profile {body['safetyProfile']!r} but this "
                     f"wallet requires {REQUIRED_SAFETY_PROFILE!r}")
+            version = int(body["policyVersion"])
+            digest = _policy_digest(body)
+            if (
+                version == self._high_water
+                and self._high_water_digest is not None
+                and digest != self._high_water_digest
+            ):
+                raise PolicyError(
+                    "same policyVersion has different signed contents; "
+                    "refusing equivocation"
+                )
             self._remote = body
-            self._high_water = max(self._high_water, int(body["policyVersion"]))
+            if version > self._high_water:
+                self._high_water = version
+                self._high_water_digest = digest
+            elif version == self._high_water:
+                self._high_water_digest = digest
             try:
                 self._write_cache(document)
                 self._write_high_water(body, document.get("signature") or {})

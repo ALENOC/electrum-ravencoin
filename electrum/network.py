@@ -281,14 +281,25 @@ MAX_WITNESS_TIP_LAG = 2
 
 
 def operator_group_for_server(server: 'ServerAddr') -> Optional[str]:
-    """Return the authenticated operator identity from the current effective
-    server registry/directory. Runtime signed-registry updates replace
-    ``constants.net.DEFAULT_SERVERS`` atomically, so this lookup automatically
-    follows accepted trust updates. Unknown/manual/discovery-only servers return
-    None; absence of identity must never manufacture a trusted operator group.
+    """Return the authenticated operator identity for this exact TLS endpoint.
+
+    ``operatorGroup`` is security-sensitive signed metadata. Trust therefore
+    binds to the registry tuple (host, TLS protocol, TLS port), not merely to a
+    hostname. A manual connection, legacy plaintext port, or different TLS port
+    on the same host must never inherit the signed operator identity. Runtime
+    registry changes take effect immediately because this lookup reads the
+    current effective mapping on every authorization decision.
     """
+    if server.protocol != 's':
+        return None
     entry = constants.net.DEFAULT_SERVERS.get(server.host)
     if not isinstance(entry, dict):
+        return None
+    signed_tls_port = entry.get('s')
+    try:
+        if signed_tls_port is None or int(signed_tls_port) != server.port:
+            return None
+    except (TypeError, ValueError):
         return None
     group = entry.get('operatorGroup')
     return group if isinstance(group, str) and group else None
