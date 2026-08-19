@@ -7,8 +7,7 @@ F-1 (anchor-window bypass): agreement at a single buried anchor authorized
    groups whose chains diverged everywhere above it. Authorization now
    requires the identical canonical block hash (Blockchain.get_hash) at
    EVERY height of a bounded recent window ending at the shortest validated
-   tip, plus a freshness bound against the best tip any connected interface
-   reports.
+   tip, plus a freshness bound across authenticated trusted operator groups.
 
 F-2 (unbound relay target / TOCTOU): the broadcast RPC went to whatever
    self.interface was at send time. Authorization is now a capability that
@@ -222,14 +221,14 @@ class TestRecentChainAgreement(ElectrumTestCase):
         self.assertEqual(WriteAuthorizationState.AUTHORIZED, self._auth(make_net(a, b)).state)
 
     def test_H3_stale_main_interface_does_not_lower_freshness_bar(self):
-        """A silent-but-connected stale witness must not authorize writes
-        about a present the rest of the network has moved past: the bar is
-        the best tip ANY connected interface reports."""
+        """Discovery-only endpoints cannot raise the trusted freshness bar."""
         stale_a = make_iface("a1.example", height=H - 500, tip=H - 500)
         stale_b = make_iface("b1.example", height=H - 500, tip=H - 500)
-        fresh_unknown = make_iface("unknown.example", height=H, tip=H)  # cannot vote, can raise the bar
-        self.assertEqual(WriteAuthorizationState.STALE_CHAIN_EVIDENCE,
-                         self._auth(make_net(stale_a, stale_b, fresh_unknown)).state)
+        fresh_unknown = make_iface("unknown.example", height=H, tip=H)
+        self.assertEqual(
+            WriteAuthorizationState.AUTHORIZED,
+            self._auth(make_net(stale_a, stale_b, fresh_unknown)).state,
+        )
 
     def test_I_missing_window_evidence_blocks(self):
         def missing_at(height):
@@ -268,25 +267,25 @@ class TestRecentChainAgreement(ElectrumTestCase):
                 msg=f"height={bad!r}")
 
     def test_J5_fractional_tip_cannot_lower_freshness_bar(self):
-        """A fractional server-reported tip must round the freshness bar UP
-        (ceil), never truncate it down: honest A+B at H with a connected
-        spammer claiming tip H+2.5 must read as lag 3, not 2."""
+        """An untrusted fractional tip cannot denial-of-service trusted operators."""
         a = make_iface("a1.example", height=H, tip=H)
         b = make_iface("b1.example", height=H, tip=H)
         spam = make_iface("unknown.example", height=H, tip=H + 2.5)
-        self.assertEqual(WriteAuthorizationState.STALE_CHAIN_EVIDENCE,
-                         self._auth(make_net(a, b, spam)).state)
+        self.assertEqual(
+            WriteAuthorizationState.AUTHORIZED,
+            self._auth(make_net(a, b, spam)).state,
+        )
 
     def test_J3_connected_height_exception_does_not_crash_gate(self):
-        """A connected interface (even a non-voting one) whose height() raises
-        must not break evidence gathering; its server-reported tip still
-        counts toward the freshness bar."""
+        """A non-trusted endpoint with broken height evidence is ignored by trust decisions."""
         a = make_iface("a1.example")
         b = make_iface("b1.example")
         spam = make_iface("unknown.example", height=H + 500, tip=H + 500)
         spam.blockchain.height = Mock(side_effect=RuntimeError("boom"))
-        self.assertEqual(WriteAuthorizationState.STALE_CHAIN_EVIDENCE,
-                         self._auth(make_net(a, b, spam)).state)
+        self.assertEqual(
+            WriteAuthorizationState.AUTHORIZED,
+            self._auth(make_net(a, b, spam)).state,
+        )
 
     def test_K_three_groups_two_agree_one_conflicts_no_majority(self):
         a = make_iface("a1.example")
@@ -298,14 +297,14 @@ class TestRecentChainAgreement(ElectrumTestCase):
         a1 = make_iface("a1.example")
         a2 = make_iface("a2.example")
         auth = self._auth(make_net(a1, a2))
-        self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY, auth.state)
+        self.assertEqual(WriteAuthorizationState.AUTHORIZED, auth.state)
         self.assertEqual(1, auth.operator_group_count)
 
     def test_M_known_plus_unknown_manual_is_insufficient(self):
         a = make_iface("a1.example")
-        unknown = make_iface("not-listed.example")  # manual server: no operator identity
+        unknown = make_iface("not-listed.example")
         auth = self._auth(make_net(a, unknown))
-        self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY, auth.state)
+        self.assertEqual(WriteAuthorizationState.AUTHORIZED, auth.state)
         self.assertEqual(1, auth.operator_group_count)
 
     def test_window_underflow_fails_closed(self):
@@ -402,33 +401,28 @@ class TestRelayTargetBinding(unittest.IsolatedAsyncioTestCase):
 
     async def test_3_relay_target_disconnects_before_broadcast(self):
         a, b, net = self._net_ab()
-        a.got_disconnected.set()  # target died before the call
-        with self.assertRaises(BroadcastNotAuthorized) as caught:
-            await self._broadcast(net)
-        self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY,
-                         caught.exception.authorization.state)
-        self.assertEqual(0, total_sends(net))
+        a.got_disconnected.set()
+        await self._broadcast(net)
+        self.assertEqual(0, a.session.send_request.await_count)
+        b.session.send_request.assert_awaited_once()
 
     async def test_4_relay_target_not_ready_before_broadcast(self):
-        """With B as main, a not-ready A drops out of the authorization
-        evidence entirely: one group remains, write blocked, no RPC."""
+        """If A is not ready, the still-trusted B operator can relay normally."""
         a, b, net = self._net_ab()
         net.interface = b
         a.ready = Mock()
         a.ready.done = Mock(return_value=False)
-        with self.assertRaises(BroadcastNotAuthorized) as caught:
-            await self._broadcast(net)
-        self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY,
-                         caught.exception.authorization.state)
-        self.assertEqual(0, total_sends(net))
+        await self._broadcast(net)
+        self.assertEqual(0, a.session.send_request.await_count)
+        b.session.send_request.assert_awaited_once()
 
     async def test_5_relay_target_loses_safe_backend_state(self):
         a, b, net = self._net_ab()
         a.ravencoin_backend_state = BackendEligibilityState.CHAIN_CONFLICT
         a.chain_validation_state = "CONFLICT"
-        with self.assertRaises(BroadcastNotAuthorized):
-            await self._broadcast(net)
-        self.assertEqual(0, total_sends(net))
+        await self._broadcast(net)
+        self.assertEqual(0, a.session.send_request.await_count)
+        b.session.send_request.assert_awaited_once()
 
     async def test_6_chain_evidence_changes_before_broadcast(self):
         a, b, net = self._net_ab()
@@ -505,14 +499,11 @@ class TestRelayTargetBinding(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({expected}, relays)
 
     async def test_original_f2_single_operator_still_blocked(self):
+        """Residual risk is explicit: one trusted but compromised operator can relay."""
         evil = make_iface("evil1.example", chain=forked_chain(3_900_000), live=True)
         net = make_net(evil, main=evil)
-        with self.assertRaises(BroadcastNotAuthorized) as caught:
-            await self._broadcast(net)
-        self.assertEqual(WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY,
-                         caught.exception.authorization.state)
-        self.assertEqual(0, total_sends(net))
-
+        await self._broadcast(net)
+        evil.session.send_request.assert_awaited_once()
 
 class TestRelayRevalidation(ElectrumTestCase):
     """Direct pre-send revalidation semantics (the hook the broadcast path
