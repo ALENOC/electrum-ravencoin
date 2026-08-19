@@ -38,15 +38,34 @@ p=1), a random 16-byte per-wallet salt and the existing authenticated ECIES
 payload. Legacy BIE1 remains readable and is atomically migrated to BIE3 after
 a successful unlock. BIE2 hardware-derived storage remains compatible.
 
-## Independent production server
+## Production operator anchor policy
 
-`electrumx.raventag.com:50002` is listed under operator group `ALENOC`, distinct
-from `rvn4lyfe`. Directory membership never authorizes a server by itself; all
-live backend and chain gates still apply.
+`electrumx.raventag.com:50002` is the only compiled server entry currently
+trusted with an `operatorGroup` (`ALENOC`). It is operator-controlled and is
+expected to run Ravencoin Core 4.8.0 with ElectrumX 1.13; the live backend and
+chain gates remain authoritative and directory metadata alone never authorizes
+it.
+
+The `rvn4lyfe` clearnet/onion endpoints are discovery-only and deliberately do
+not carry `operatorGroup`. Consequently the two-independent-operator quorum is
+currently unavailable in the shipped directory: sensitive writes and promotion
+of remote data into verified wallet state fail closed until a second independently
+trusted operator anchor (or a cryptographically signed server registry) is added.
+This is an intentional safety-over-availability choice.
+
+## Dynamic server directory
+
+Already-built clients can refresh ordinary ElectrumX discovery entries from the
+repository at runtime. The unsigned remote list may add, update, or remove
+non-anchor servers, but it cannot replace the RavenTag anchor and any remote
+`operatorGroup` field is discarded. A validated cache is used as fallback, with
+the compiled directory remaining the startup fallback when no cache exists.
 
 ## Regression coverage
 
 `electrum/tests/test_security_remediation.py` covers the PoW downgrade guard,
 read-chain authorization, verified-state quarantine, TLS first-contact policy,
-backend-claim semantics, BIE3/scrypt migration and production operator-group
-diversity. It is part of the release-gating CI test surface.
+backend-claim semantics, BIE3/scrypt migration and the RavenTag-only production
+operator policy. `electrum/tests/test_server_list_updater.py` covers the runtime
+directory update trust boundary, validation, cache integrity and anchor
+immutability. Both are part of the release-gating CI test surface.
