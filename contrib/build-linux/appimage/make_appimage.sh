@@ -281,8 +281,6 @@ info "creating the AppImage."
 (
     cd "$BUILDDIR"
     cp "$CACHEDIR/appimagetool" "$CACHEDIR/appimagetool_copy"
-    # zero out "appimage" magic bytes, as on some systems they confuse the linker
-    sed -i 's|AI\x02|\x00\x00\x00|' "$CACHEDIR/appimagetool_copy"
     chmod +x "$CACHEDIR/appimagetool_copy"
     "$CACHEDIR/appimagetool_copy" --appimage-extract
     # We build a small wrapper for mksquashfs that removes the -mkfs-time option

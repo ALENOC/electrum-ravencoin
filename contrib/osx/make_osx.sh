@@ -88,8 +88,9 @@ break_legacy_easy_install
 # This helps to avoid older versions of pip-installed dependencies interfering with the build.
 VENV_DIR="$CONTRIB_OSX/build-venv"
 rm -rf "$VENV_DIR"
-python3 -m venv $VENV_DIR
-source $VENV_DIR/bin/activate
+python3 -m venv "$VENV_DIR"
+source "$VENV_DIR/bin/activate"
+PYTHON="$VENV_DIR/bin/python3"
 
 # don't add debug info to compiled C files (e.g. when pip calls setuptools/wheel calls gcc)
 # see https://github.com/pypa/pip/issues/6505#issuecomment-526613584
@@ -110,10 +111,10 @@ info "Installing build dependencies"
 #       - the whole of "requirements-build-base.txt", which includes pip and friends, as it also includes "wheel",
 #         and I am not quite sure how to break the circular dependence there (I guess we could introduce
 #         "requirements-build-base-base.txt" with just wheel in it...)
-python3 -m pip install --no-build-isolation --no-dependencies --no-warn-script-location \
+"$PYTHON" -m pip install --no-build-isolation --no-dependencies --no-warn-script-location \
     -Ir ./contrib/deterministic-build/requirements-build-base.txt ||
     fail "Could not install build dependencies (base)"
-python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: --no-warn-script-location \
+"$PYTHON" -m pip install --no-build-isolation --no-dependencies --no-binary :all: --no-warn-script-location \
     -Ir ./contrib/deterministic-build/requirements-build-mac.txt ||
     fail "Could not install build dependencies (mac)"
 
@@ -146,17 +147,17 @@ PYINSTALLER_COMMIT="5d7a0449ecea400eccbbb30d5fcef27d72f8f75d"
     echo "const char *electrum_tag = \"tagged by Electrum@$ELECTRUM_COMMIT_HASH\";" >>./bootloader/src/pyi_main.c
     pushd bootloader
     # compile bootloader
-    python3 ./waf all CFLAGS="-static"
+    "$PYTHON" ./waf all CFLAGS="-static"
     popd
     # sanity check bootloader is there:
     [[ -e "PyInstaller/bootloader/Darwin-64bit/runw" ]] || fail "Could not find runw in target dir!"
 ) || fail "PyInstaller build failed"
 info "Installing PyInstaller."
-python3 -m pip install --no-build-isolation --no-dependencies --no-warn-script-location "$CACHEDIR/pyinstaller"
+"$PYTHON" -m pip install --no-build-isolation --no-dependencies --no-warn-script-location "$CACHEDIR/pyinstaller"
 
 info "Using these versions for building $PACKAGE:"
 sw_vers
-python3 --version
+"$PYTHON" --version
 echo -n "Pyinstaller "
 pyinstaller --version
 
@@ -201,7 +202,7 @@ fi
 cp -f "$DLL_TARGET_DIR/libusb-1.0.dylib" "$PROJECT_ROOT/electrum/" || fail "Could not copy libusb dylib"
 
 info "Installing requirements..."
-python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: \
+"$PYTHON" -m pip install --no-build-isolation --no-dependencies --no-binary :all: \
     --no-warn-script-location \
     -Ir ./contrib/deterministic-build/requirements.txt ||
     fail "Could not install requirements"
@@ -210,34 +211,34 @@ python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: 
 # Restore the already-audited, hash-pinned build pip only for the legacy
 # hardware-wallet dependency phase; do not change the wallet dependency itself.
 info "Restoring legacy-compatible pip for hardware wallet requirements..."
-python3 -m pip install --no-dependencies --require-hashes --no-warn-script-location \
+"$PYTHON" -m pip install --no-dependencies --require-hashes --no-warn-script-location \
     -r ./contrib/deterministic-build/requirements-pip-legacy.txt ||
     fail "Could not restore legacy-compatible pip"
 
 info "Installing hardware wallet requirements..."
-python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: --only-binary cryptography \
+"$PYTHON" -m pip install --no-build-isolation --no-dependencies --no-binary :all: --only-binary cryptography \
     --no-warn-script-location \
     -Ir ./contrib/deterministic-build/requirements-hw.txt ||
     fail "Could not install hardware wallet requirements"
 
 info "Installing dependencies specific to binaries..."
-python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: --only-binary PyQt5,PyQt5-Qt5,cryptography \
+"$PYTHON" -m pip install --no-build-isolation --no-dependencies --no-binary :all: --only-binary PyQt5,PyQt5-Qt5,cryptography \
     --no-warn-script-location \
     -Ir ./contrib/deterministic-build/requirements-binaries-mac.txt ||
     fail "Could not install dependencies specific to binaries"
 
 info "Installing dependencies sepcific to ravencoin..."
-python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: \
+"$PYTHON" -m pip install --no-build-isolation --no-dependencies --no-binary :all: \
     --no-warn-script-location \
     -Ir ./contrib/deterministic-build/requirements-ravencoin-pypi.txt ||
     fail "Could not install dependencies from pypi"
-python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: \
+"$PYTHON" -m pip install --no-build-isolation --no-dependencies --no-binary :all: \
     --no-warn-script-location \
     -Ir ./contrib/deterministic-build/requirements-ravencoin-git.txt ||
     fail "Could not install dependencies from git"
 
 info "Building $PACKAGE..."
-python3 -m pip install --no-build-isolation --no-dependencies \
+"$PYTHON" -m pip install --no-build-isolation --no-dependencies \
     --no-warn-script-location . >/dev/null || fail "Could not build $PACKAGE"
 # pyinstaller needs to be able to "import electrum", for which we need libsecp256k1:
 # (or could try "pip install -e" instead)
