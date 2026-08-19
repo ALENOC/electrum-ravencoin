@@ -1,0 +1,122 @@
+name: Temporary RVN endpoint probe
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Live ElectrumX and same-IP Ravencoin Core probe
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, ipaddress, json, random, socket, ssl, struct, time
+
+          targets = [
+              ("electrumx.raventag.com", 50002, "CONTROL_RAVENTAG"),
+              ("162.19.153.65", 50002, "UPSTREAM_1209K"),
+              ("electrum1.cipig.net", 20051, "1209K"),
+              ("electrum2.cipig.net", 20051, "1209K"),
+              ("electrum3.cipig.net", 20051, "PUBLISHED"),
+              ("electrum-rvn.moontree.com", 50002, "UPSTREAM"),
+              ("rvn4lyfe.com", 50002, "UPSTREAM"),
+              ("electrum-rvn.qortal.online", 50002, "QORTAL"),
+              ("electrum1-rvn.qortal.online", 50002, "QORTAL"),
+          ]
+
+          def ips(host):
+              try:
+                  return list(dict.fromkeys(x[4][0] for x in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)))
+              except Exception:
+                  return []
+
+          def electrum(host, port):
+              raw = socket.create_connection((host, port), timeout=6); raw.settimeout(6)
+              ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+              s = ctx.wrap_socket(raw, server_hostname=host); s.settimeout(6)
+              f = s.makefile("rwb"); rid = 0
+              def call(method, params):
+                  nonlocal rid
+                  rid += 1
+                  f.write((json.dumps({"jsonrpc":"2.0","id":rid,"method":method,"params":params})+"\n").encode()); f.flush()
+                  while True:
+                      line = f.readline()
+                      if not line: raise ConnectionError("EOF")
+                      obj = json.loads(line)
+                      if obj.get("id") == rid: return obj
+              try:
+                  v = call("server.version", ["ALENOC-probe", ["1.1","1.4"]])
+                  h = call("blockchain.headers.subscribe", [])
+                  try: b = call("server.ravencoin_backend", [])
+                  except Exception as e: b = {"error": str(e)}
+                  try: p = call("server.peers.subscribe", [])
+                  except Exception as e: p = {"error": str(e)}
+                  return {"version":v, "header":h, "backend":b, "peers":p}
+              finally:
+                  f.close(); s.close()
+
+          MAGIC=b"RAVN"
+          def vi(n): return bytes([n]) if n < 253 else b"\xfd"+struct.pack("<H",n)
+          def rv(buf, off):
+              x=buf[off]; off+=1
+              if x<253:return x,off
+              if x==253:return struct.unpack_from("<H",buf,off)[0],off+2
+              if x==254:return struct.unpack_from("<I",buf,off)[0],off+4
+              return struct.unpack_from("<Q",buf,off)[0],off+8
+          def addr(ip, port):
+              p=ipaddress.ip_address(ip).packed
+              if len(p)==4:p=b"\x00"*10+b"\xff\xff"+p
+              return struct.pack("<Q",0)+p+struct.pack(">H",port)
+          def recvn(s,n):
+              b=b""
+              while len(b)<n:
+                  c=s.recv(n-len(b))
+                  if not c:raise ConnectionError("EOF")
+                  b+=c
+              return b
+          def core(ip):
+              s=socket.create_connection((ip,8767),timeout=5); s.settimeout(5)
+              try:
+                  ua=b"/ALENOC-probe:0.1/"
+                  payload=struct.pack("<iQq",70028,0,int(time.time()))+addr(ip,8767)+addr("0.0.0.0",0)+struct.pack("<Q",random.getrandbits(64))+vi(len(ua))+ua+struct.pack("<i",0)+b"\x00"
+                  hdr=MAGIC+(b"version"+b"\x00"*5)+struct.pack("<I",len(payload))+hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+                  s.sendall(hdr+payload)
+                  for _ in range(4):
+                      h=recvn(s,24)
+                      if h[:4]!=MAGIC: raise ValueError("bad magic "+h[:4].hex())
+                      cmd=h[4:16].rstrip(b"\x00").decode(errors="replace"); n=struct.unpack_from("<I",h,16)[0]
+                      body=recvn(s,n)
+                      if cmd=="version":
+                          proto=struct.unpack_from("<i",body,0)[0]; off=80; ln,off=rv(body,off)
+                          remote=body[off:off+ln].decode(errors="replace"); off+=ln
+                          height=struct.unpack_from("<i",body,off)[0] if off+4<=len(body) else None
+                          return {"open":True,"protocol":proto,"user_agent":remote,"height":height}
+                  raise TimeoutError("no version")
+              finally:s.close()
+
+          all_peers={}
+          print("PROBE_UTC",time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()))
+          for host,port,source in targets:
+              resolved=ips(host); er={}; cr={}
+              try:
+                  er=electrum(host,port)
+                  peers=er.get("peers",{}).get("result") if isinstance(er.get("peers"),dict) else None
+                  if isinstance(peers,list):
+                      for p in peers:
+                          if isinstance(p,list) and len(p)>=3: all_peers[str(p[1])]=p
+              except Exception as e: er={"exception":type(e).__name__+": "+str(e)}
+              for ip in resolved[:4]:
+                  try: cr[ip]=core(ip)
+                  except Exception as e: cr[ip]={"open":False,"error":type(e).__name__+": "+str(e)}
+              v=er.get("version",{}).get("result") if isinstance(er.get("version"),dict) else None
+              hh=er.get("header",{}).get("result") if isinstance(er.get("header"),dict) else None
+              backend=er.get("backend",{})
+              print("RESULT",json.dumps({"host":host,"port":port,"source":source,"ips":resolved,"electrum_version":v,"electrum_height":hh.get("height") if isinstance(hh,dict) else None,"backend":backend,"same_ip_8767":cr},sort_keys=True))
+          print("DISCOVERED_PEERS")
+          for name in sorted(all_peers): print("PEER",json.dumps(all_peers[name],sort_keys=True))
+          PY
