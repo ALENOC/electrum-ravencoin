@@ -209,30 +209,25 @@ class BestEffortRequestFailed(NetworkException): pass
 class WriteAuthorizationState(str, Enum):
     """The canonical outcome of Network.get_write_authorization().
 
-    interface.ready, the policy-conforming backend claim, and
-    chain_validation_state == VERIFIED are each necessary but not sufficient
-    for trusted chain-dependent actions.  A single server is never allowed to
-    promote its own post-checkpoint view to trusted wallet state. Broadcasts
-    and verified reads additionally require independent agreement across at
-    least MIN_INDEPENDENT_OPERATOR_GROUPS distinct, individually-validated
-    operators.
+    interface.ready, the policy-conforming backend claim, chain validation,
+    and an authenticated operatorGroup are required for trusted chain-dependent
+    actions. One trusted operator is sufficient for normal Electrum operation.
+    If multiple trusted operator groups are connected, every group is compared
+    and any chain disagreement still fails closed instead of being ignored.
     """
     AUTHORIZED = "AUTHORIZED"
-    #: Fewer than MIN_INDEPENDENT_OPERATOR_GROUPS distinct, individually
-    #: validated operator groups are currently available. This is the
-    #: default state with the shipped server list, which is a single
-    #: operator (rvn4lyfe.com plus its .onion mirror) -- broadcast is
-    #: blocked until a genuinely independent second operator is connected.
+    #: Fewer than MIN_INDEPENDENT_OPERATOR_GROUPS authenticated, individually
+    #: validated operator groups are currently available. With the threshold
+    #: at one, this means no trusted operator is currently usable.
     INSUFFICIENT_OPERATOR_DIVERSITY = "INSUFFICIENT_OPERATOR_DIVERSITY"
     #: At least two independent operator groups are validated, but they do
     #: not agree on the chain at their common ancestor. This is a security
     #: conflict, not a vote: neither side wins by endpoint count or
     #: connection order.
     CHAIN_CONFLICT = "CHAIN_CONFLICT"
-    #: At least two independent operator groups are validated, but the
-    #: shortest validated tip among them is too far behind the best tip any
-    #: connected interface reports. Their agreement covers only the past;
-    #: it is stale evidence for a write that depends on the present chain.
+    #: Multiple trusted operator groups are validated, but the shortest
+    #: trusted tip lags the best trusted tip beyond the allowed bound. Their
+    #: common evidence is stale for a chain-dependent action.
     STALE_CHAIN_EVIDENCE = "STALE_CHAIN_EVIDENCE"
     #: No interface has completed the backend-claim and chain-validation
     #: gates yet (nothing individually safe to even group), or the chain
@@ -257,10 +252,12 @@ class WriteAuthorization(NamedTuple):
     window_hashes: Tuple[str, ...] = ()
 
 
-#: A single operator, however many endpoints it runs, is not independent
-#: consensus. Two is the minimum for "independent agreement" to mean
-#: anything; this is deliberately not configurable from a remote source.
-MIN_INDEPENDENT_OPERATOR_GROUPS = 2
+#: One authenticated, individually validated operator group is sufficient for
+#: normal wallet operation, preserving the traditional Electrum availability
+#: model. If multiple trusted groups are connected, all are still compared and
+#: any disagreement fails closed. This threshold is not remotely configurable.
+MIN_INDEPENDENT_OPERATOR_GROUPS = 1
+MULTI_OPERATOR_ASSURANCE_GROUPS = 2
 
 #: Length of the recent-chain window every authorized operator group must
 #: agree on, hash-for-hash, ending at the shortest validated tip among the
@@ -274,25 +271,21 @@ MIN_INDEPENDENT_OPERATOR_GROUPS = 2
 #: covers the old ``- 6`` anchor region.
 RECENT_AGREEMENT_WINDOW = 12
 
-#: How far any witness group's validated tip may lag behind the best tip
-#: observed by ANY connected interface before its evidence counts as stale.
-#: Blocks above the shortest witness tip cannot be cross-checked between
-#: witnesses (no one else has seen them yet), so this bound is what caps a
-#: taller fabricated chain: a malicious group can claim at most this many
-#: unseen blocks above the honest frontier before freshness fails closed.
+#: How far the shortest trusted operator tip may lag behind the best trusted
+#: operator tip before multi-operator evidence counts as stale. Discovery-only
+#: endpoints are intentionally excluded: unauthenticated metadata must not be
+#: able to denial-of-service the sole trusted operator by advertising a fake tip.
 #: 2 blocks is ~2 minutes of propagation/validation slack between honest
 #: servers; availability of writes is secondary to their safety.
 MAX_WITNESS_TIP_LAG = 2
 
 
 def operator_group_for_server(server: 'ServerAddr') -> Optional[str]:
-    """Best-effort operator identity for a server, from the shipped server
-    list only (constants.net.DEFAULT_SERVERS). A server that is not in that
-    list -- including any the user added manually -- has no known operator
-    identity here, and returns None. None must never be treated as its own
-    independent group: an absent identity is not evidence of independence
-    (server-policy: unknown/missing operatorGroup must not silently create
-    a new independent group).
+    """Return the authenticated operator identity from the current effective
+    server registry/directory. Runtime signed-registry updates replace
+    ``constants.net.DEFAULT_SERVERS`` atomically, so this lookup automatically
+    follows accepted trust updates. Unknown/manual/discovery-only servers return
+    None; absence of identity must never manufacture a trusted operator group.
     """
     entry = constants.net.DEFAULT_SERVERS.get(server.host)
     if not isinstance(entry, dict):
@@ -342,10 +335,9 @@ class BroadcastNotAuthorized(TxBroadcastError):
     def get_message_for_gui(self):
         state = self.authorization.state
         if state == WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY:
-            return _("Broadcast blocked: insufficient independent server consensus.\n"
-                     "At least {n} independently-operated, individually verified servers "
-                     "are required before this wallet will send a transaction.")\
-                .format(n=MIN_INDEPENDENT_OPERATOR_GROUPS)
+            return _("Broadcast blocked: no trusted ElectrumX operator is currently "
+                     "available and individually verified. Connect to a trusted server "
+                     "and let backend/chain validation complete before retrying.")
         if state == WriteAuthorizationState.CHAIN_CONFLICT:
             return _("Broadcast blocked: independent servers disagree about the current "
                      "blockchain. This can indicate a compromised or malicious server; "
@@ -1067,9 +1059,9 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
         server happens to be the main one, or on the order interfaces
         connected in. Authorization requires RECENT chain consensus: the
         identical canonical block hash at every height of a bounded window
-        ending at the shortest validated tip, with every witness group's tip
-        current within MAX_WITNESS_TIP_LAG of the best tip any connected
-        interface reports. On success the result is a capability binding the
+        ending at the shortest validated tip. With multiple trusted groups,
+        each trusted tip must remain within MAX_WITNESS_TIP_LAG of the best
+        trusted tip. On success the result is a capability binding the
         exact participant interfaces and the single relay target; the write
         must be relayed through that target, never through a re-read
         self.interface.
@@ -1092,7 +1084,7 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
         if len(groups) < MIN_INDEPENDENT_OPERATOR_GROUPS:
             return WriteAuthorization(
                 WriteAuthorizationState.INSUFFICIENT_OPERATOR_DIVERSITY,
-                f"only {len(groups)} independent operator group(s) verified; "
+                f"only {len(groups)} trusted operator group(s) verified; "
                 f"at least {MIN_INDEPENDENT_OPERATOR_GROUPS} are required for writes",
                 len(groups))
 
@@ -1120,11 +1112,10 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
                 len(groups))
         min_height = min(heights)
 
-        # Freshness: agreement over an old window must never stand in for
-        # agreement about the present. The bar is the best tip ANY connected
-        # interface reports (server-reported tips only ever raise the bar,
-        # which can block writes -- fail closed -- but never lower it).
-        best_tip = max(self._connected_tip_heights())
+        # Freshness is measured only across authenticated/validated operator
+        # representatives. Discovery-only endpoints must not be able to DoS a
+        # single trusted operator by advertising a fabricated higher tip.
+        best_tip = max(heights)
         if best_tip - min_height > MAX_WITNESS_TIP_LAG:
             return WriteAuthorization(
                 WriteAuthorizationState.STALE_CHAIN_EVIDENCE,
@@ -1171,8 +1162,8 @@ class Network(Logger, NetworkRetryManager[ServerAddr]):
             min(representatives, key=lambda i: i.server.to_friendly_name()))
         return WriteAuthorization(
             WriteAuthorizationState.AUTHORIZED,
-            f"{len(groups)} independent operator groups agree on all "
-            f"{RECENT_AGREEMENT_WINDOW} recent blocks through height {min_height}",
+            (f"{len(groups)} trusted operator group(s) validated on all "
+             f"{RECENT_AGREEMENT_WINDOW} recent blocks through height {min_height}"),
             len(groups),
             participant_interfaces=tuple(representatives),
             relay_interface=relay_interface,

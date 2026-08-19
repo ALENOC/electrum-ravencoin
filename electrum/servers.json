@@ -1,22 +1,20 @@
 {
   "aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion": {
-    "backend_policy": "historical-unverified; live capability required",
-    "operatorGroup": "rvn4lyfe",
+    "backend_policy": "discovery-only; live capability required",
     "pruning": "-",
     "s": "50002",
     "t": "50001",
     "version": "1.11"
   },
   "electrumx.raventag.com": {
-    "backend_policy": "historical-unverified; live capability required",
+    "backend_policy": "operator-controlled anchor; Ravencoin Core >=4.8.0 and ElectrumX-RVN >=1.13.0; newer Core releases require signed safety-policy certification; live capability required",
     "operatorGroup": "ALENOC",
     "pruning": "-",
     "s": "50002",
     "version": "1.11"
   },
   "rvn4lyfe.com": {
-    "backend_policy": "historical-unverified; live capability required",
-    "operatorGroup": "rvn4lyfe",
+    "backend_policy": "discovery-only; live capability required",
     "pruning": "-",
     "s": "50002",
     "t": "50001",

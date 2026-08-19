@@ -24,6 +24,9 @@ bin/
 electrum_data
 .DS_Store
 
+# local security-sensitive material
+.server-registry-key/
+
 # tests/tox
 .tox/
 .cache/

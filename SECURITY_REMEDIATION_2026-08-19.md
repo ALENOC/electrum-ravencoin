@@ -9,15 +9,15 @@ block-number-aware `progpow::verify(context, block_number, ...)`, while the
 pinned Python binding does not expose that function. Calling its differently
 shaped `kawpow_verify(context, ...)` would create a false security guarantee.
 
-The single-malicious-ElectrumX path is closed instead by extending the existing
-independent-operator chain-consensus boundary from transaction broadcast to
-promotion of remote data into verified wallet state. The exact serving
-interface must match the agreed chain, the claimed height must be no newer than
-the agreed witness tip, authorization is rechecked after the proof request,
-and unverified positive-height outputs/spends are quarantined from balances and
-coin selection. Existing post-checkpoint verification caches are demoted once
-and revalidated. Post-KAWPOW heights also cannot downgrade to legacy hashing by
-supplying an old timestamp.
+The independent-operator comparison machinery remains, but the wallet restores
+the traditional Electrum availability model: one authenticated, individually
+validated operator is sufficient for normal reads, SPV promotion, and broadcast.
+If multiple trusted operator groups are online, their recent-chain windows must
+agree and any conflict fails closed. Compromise of the sole trusted operator is
+therefore an explicit residual risk; this client is not a full Ravencoin consensus
+verifier. Unverified positive-height state remains quarantined until the serving
+trusted interface passes authorization, and post-KAWPOW heights still cannot
+downgrade to legacy hashing via timestamp manipulation.
 
 ## RVN-SEC-002 — backend claim semantics
 
@@ -38,15 +38,72 @@ p=1), a random 16-byte per-wallet salt and the existing authenticated ECIES
 payload. Legacy BIE1 remains readable and is atomically migrated to BIE3 after
 a successful unlock. BIE2 hardware-derived storage remains compatible.
 
-## Independent production server
+## Production operator anchor policy
 
-`electrumx.raventag.com:50002` is listed under operator group `ALENOC`, distinct
-from `rvn4lyfe`. Directory membership never authorizes a server by itself; all
-live backend and chain gates still apply.
+`electrumx.raventag.com:50002` is the sole compiled server entry currently
+trusted with an `operatorGroup` (`ALENOC`). Directory metadata does not bypass
+live validation: the interface must still satisfy the TLS, Ravencoin backend,
+Core safety-policy, chain-validation, and readiness gates before it can authorize
+trusted chain-dependent actions.
+
+RavenTag's maintained deployment baseline is Ravencoin Core **4.8.0 or later**
+and ElectrumX-RVN **1.13.x**. Core releases newer than 4.8.0 are not trusted
+merely because their version number is higher: the exact release identity must
+also be accepted by the separately signed Core safety policy. ElectrumX is not
+hard-pinned to the exact `1.13.0` product-version string; later compatible
+ElectrumX-RVN releases may be used when they negotiate the supported Electrum
+protocol and continue to provide the required Ravencoin backend capability
+contract.
+
+The `rvn4lyfe` clearnet/onion endpoints are discovery-only and deliberately do
+not carry `operatorGroup`. Their presence or absence does not satisfy, weaken,
+or raise the trusted-operator threshold. With the current policy, **one**
+authenticated and individually validated trusted operator is sufficient for
+normal wallet operation. If a future signed registry introduces a second
+independently operated trusted group, agreement provides stronger assurance;
+any disagreement between trusted groups still fails closed.
+
+## Signed server registry
+
+Security-sensitive server trust metadata is distributed through
+`electrum/servers.signed.json`, authenticated by the dedicated Ed25519 registry
+trust root. The current production key ID is `d7a50f481a496f3e`, and the
+committed registry is version 2.
+
+A valid signed registry may add, update, or remove servers and may assign or
+remove `operatorGroup` values without requiring an already-released wallet to be
+rebuilt. The registry path enforces signature verification, expiry, monotonic
+`registryVersion`, local high-water rollback protection, and rejection of
+same-version/different-content equivocation.
+
+The signing private key is never tracked by Git. The maintainer checkout may keep
+it in the gitignored `.server-registry-key/` directory for signing, with a
+separate protected offline backup. Operational details are documented in
+`SERVER_REGISTRY.md`.
+
+## Dynamic server directory
+
+Already-built clients can refresh the server directory at runtime through two
+separate trust channels. The signed registry is authoritative for authenticated
+operator metadata after all signature/expiry/rollback checks pass. The unsigned
+`electrum/servers.json` channel is discovery-only: it may add, update, or remove
+ordinary endpoints, but remote `operatorGroup` fields are stripped and cannot
+mint trusted operators.
+
+If no valid signed registry is available, the client retains the compiled
+RavenTag trusted anchor and may use validated unsigned discovery data for other
+endpoints. A still-valid cached signed registry is not downgraded merely because
+a refresh temporarily fails.
 
 ## Regression coverage
 
 `electrum/tests/test_security_remediation.py` covers the PoW downgrade guard,
 read-chain authorization, verified-state quarantine, TLS first-contact policy,
-backend-claim semantics, BIE3/scrypt migration and production operator-group
-diversity. It is part of the release-gating CI test surface.
+backend-claim semantics, BIE3/scrypt migration and the RavenTag-only compiled
+operator policy. `electrum/tests/test_server_list_updater.py` covers unsigned
+trust stripping, RavenTag fallback behavior, signed-registry signature/tamper/
+expiry/rollback/equivocation handling, the embedded registry key, and the
+committed signed registry. `electrum/tests/test_write_authorization.py` and
+`electrum/tests/test_recent_agreement_relay.py` cover the single-trusted-operator
+availability model plus fail-closed conflicts when multiple trusted groups are
+present. These tests are part of the release-gating CI surface.

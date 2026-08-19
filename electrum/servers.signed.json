@@ -1,0 +1,36 @@
+{
+  "registry": {
+    "expiresAt": "2027-08-19T09:28:53+00:00",
+    "generatedAt": "2026-08-19T09:28:53+00:00",
+    "registryVersion": 2,
+    "schemaVersion": 1,
+    "servers": {
+      "aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion": {
+        "backend_policy": "discovery-only; live capability required",
+        "pruning": "-",
+        "s": "50002",
+        "t": "50001",
+        "version": "1.11"
+      },
+      "electrumx.raventag.com": {
+        "backend_policy": "operator-controlled anchor; Ravencoin Core >=4.8.0 and ElectrumX-RVN >=1.13.0; newer Core releases require signed safety-policy certification; live capability required",
+        "operatorGroup": "ALENOC",
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.11"
+      },
+      "rvn4lyfe.com": {
+        "backend_policy": "discovery-only; live capability required",
+        "pruning": "-",
+        "s": "50002",
+        "t": "50001",
+        "version": "1.11"
+      }
+    }
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "keyId": "d7a50f481a496f3e",
+    "value": "q3I6klcBq2Lel5v3GSy7wUCjw1m+WrjqpZvKQdggiPVpWpF8iYmfxqGCid/1mQlHyfJAm3ty7O48wxbknKLFAA=="
+  }
+}
