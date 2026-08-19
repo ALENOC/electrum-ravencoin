@@ -302,6 +302,23 @@ class TestDynamicServerList(unittest.TestCase):
             hashlib.sha256(raw).hexdigest()[:16],
         )
 
+    def test_committed_signed_registry_verifies_with_embedded_key(self):
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "servers.signed.json",
+        )
+        with open(path, "r", encoding="utf-8") as handle:
+            document = json.load(handle)
+        body = verify_signed_registry(
+            document,
+            now=datetime.datetime(2026, 8, 20, tzinfo=datetime.timezone.utc),
+        )
+        self.assertEqual(1, body["registryVersion"])
+        self.assertEqual(
+            "ALENOC",
+            body["servers"]["electrumx.raventag.com"]["operatorGroup"],
+        )
+
     def test_malformed_remote_entries_fail_closed(self):
         bad_values = [
             [],
