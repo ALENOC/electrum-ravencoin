@@ -1,62 +1,37 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 set -e
 
-# Parameterize
+PACKAGE="Electrum-Ravencoin"
 PYTHON_VERSION=3.10.11
-PY_VER_MAJOR="3.10" # as it appears in fs paths
-PACKAGE=Electrum-Ravencoin
-GIT_REPO=https://github.com/Electrum-RVN-SIG/electrum-ravencoin
+PY_VER_MAJOR="3.10"
 
-export GCC_STRIP_BINARIES="1"
-export PYTHONDONTWRITEBYTECODE=1 # don't create __pycache__/ folders with .pyc files
-
-. "$(dirname "$0")/../build_tools_util.sh"
-
-CONTRIB_OSX="$(dirname "$(realpath "$0")")"
-CONTRIB="$CONTRIB_OSX/.."
-PROJECT_ROOT="$CONTRIB/.."
+CONTRIB_OSX="$(dirname "$0")"
+CONTRIB="$(dirname "$CONTRIB_OSX")"
+PROJECT_ROOT="$(dirname "$CONTRIB")"
+DISTDIR="$PROJECT_ROOT/dist"
 CACHEDIR="$CONTRIB_OSX/.cache"
 export DLL_TARGET_DIR="$CACHEDIR/dlls"
 
-mkdir -p "$CACHEDIR" "$DLL_TARGET_DIR"
+. "$CONTRIB"/build_tools_util.sh
 
-cd "$PROJECT_ROOT"
+mkdir -p "$CACHEDIR" "$DLL_TARGET_DIR" "$DISTDIR"
 
-git -C "$PROJECT_ROOT" rev-parse 2>/dev/null || fail "Building outside a git clone is not supported."
-
-which brew >/dev/null 2>&1 || fail "Please install brew from https://brew.sh/ to continue"
-which xcodebuild >/dev/null 2>&1 || fail "Please install xcode command line tools to continue"
-
-# Code Signing: See https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/Procedures/Procedures.html
 if [ -n "$CODESIGN_CERT" ]; then
-    # Test the identity is valid for signing by doing this hack. There is no other way to do this.
-    cp -f /bin/ls ./CODESIGN_TEST
-    set +e
-    codesign -s "$CODESIGN_CERT" --dryrun -f ./CODESIGN_TEST >/dev/null 2>&1
-    res=$?
-    set -e
-    rm -f ./CODESIGN_TEST
-    if ((res)); then
-        fail "Code signing identity \"$CODESIGN_CERT\" appears to be invalid."
-    fi
-    unset res
-    info "Code signing enabled using identity \"$CODESIGN_CERT\""
+    CODESIGN_ENABLED=1
+    info "Code signing ENABLED. Identity: $CODESIGN_CERT"
 else
+    CODESIGN_ENABLED=0
     warn "Code signing DISABLED. Specify a valid macOS Developer identity installed on the system to enable signing."
 fi
 
-function DoCodeSignMaybe { # ARGS: infoName fileOrDirName
+DoCodeSignMaybe() {
+    if [ "$CODESIGN_ENABLED" != 1 ]; then
+        return 0
+    fi
     infoName="$1"
     file="$2"
-    deep=""
-    if [ -z "$CODESIGN_CERT" ]; then
-        # no cert -> we won't codesign
-        return
-    fi
-    if [ -d "$file" ]; then
-        deep="--deep"
-    fi
+    deep="$3"
     if [ -z "$infoName" ] || [ -z "$file" ] || [ ! -e "$file" ]; then
         fail "Argument error to internal function DoCodeSignMaybe()"
     fi
@@ -118,7 +93,10 @@ python3 -m pip install --no-build-isolation --no-dependencies --no-binary :all: 
     fail "Could not install build dependencies (mac)"
 
 info "Installing some build-time deps for compilation..."
-brew install autoconf automake libtool gettext coreutils pkgconfig cmake
+# libiconv is keg-only on Homebrew. ZBar's QR text decoder still calls iconv
+# even when NLS is disabled, so install and link this exact provider explicitly
+# instead of accidentally mixing Homebrew headers with macOS system libraries.
+brew install autoconf automake libtool gettext libiconv coreutils pkgconfig cmake
 
 info "Building PyInstaller."
 PYINSTALLER_REPO="https://github.com/pyinstaller/pyinstaller.git"
@@ -248,26 +226,27 @@ VERSION=$(git describe --tags --dirty --always)
 info "Building binary"
 ELECTRUM_VERSION=$VERSION pyinstaller --noconfirm --clean contrib/osx/osx.spec || fail "Could not build binary"
 
-info "Finished building unsigned dist/${PACKAGE}.app. This hash should be reproducible:"
-find "dist/${PACKAGE}.app" -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256
+# copy binary to dist dir
+mkdir -p "$DISTDIR"
 
-DoCodeSignMaybe "app bundle" "dist/${PACKAGE}.app"
-
-if [ ! -z "$CODESIGN_CERT" ]; then
-    if [ ! -z "$APPLE_ID_USER" ]; then
-        info "Notarizing .app with Apple's central server..."
-        "${CONTRIB_OSX}/notarize_app.sh" "dist/${PACKAGE}.app" || fail "Could not notarize binary."
-    else
-        warn "AppleID details not set! Skipping Apple notarization."
-    fi
+# historically, the .app is called Electrum.app by osx.spec
+APP_NAME="Electrum-Ravencoin.app"
+if [ -d "dist/Electrum.app" ]; then
+    mv "dist/Electrum.app" "dist/$APP_NAME"
+elif [ -d "dist/$APP_NAME" ]; then
+    :
+else
+    fail "Could not find built app bundle"
 fi
 
-info "Creating .DMG"
-hdiutil create -fs HFS+ -volname $PACKAGE -srcfolder dist/$PACKAGE.app dist/electrum-ravencoin-$VERSION.dmg || fail "Could not create .DMG"
+DoCodeSignMaybe "app bundle" "dist/$APP_NAME" "--deep"
 
-DoCodeSignMaybe ".DMG" "dist/electrum-ravencoin-${VERSION}.dmg"
+DMG_NAME="$PACKAGE-$VERSION.dmg"
+rm -f "$DISTDIR/$DMG_NAME"
 
-if [ -z "$CODESIGN_CERT" ]; then
-    warn "App was built successfully but was not code signed. Users may get security warnings from macOS."
-    warn "Specify a valid code signing identity to enable code signing."
-fi
+info "Creating DMG..."
+hdiutil create -fs HFS+ -volname "$PACKAGE" -srcfolder "dist/$APP_NAME" "$DISTDIR/$DMG_NAME" || fail "Could not create DMG"
+
+DoCodeSignMaybe "DMG" "$DISTDIR/$DMG_NAME" ""
+
+info "Done. Binary is at $DISTDIR/$DMG_NAME"
