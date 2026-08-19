@@ -11,7 +11,7 @@ on:
       - "contrib/make_zbar.sh"
       - "contrib/release_signing.py"
       - "RELEASE_SIGNING.md"
-      - "RELEASE_NOTES_1.3.0rc2.md"
+      - "RELEASE_NOTES_*.md"
   workflow_dispatch:
   push:
     tags:
@@ -58,6 +58,11 @@ jobs:
 
           if [[ "$REF_TYPE" == "tag" && ! -f RELEASE_SIGNING_PUBKEY.json ]]; then
             echo "::error::RELEASE_SIGNING_PUBKEY.json must be committed before creating a release tag"
+            exit 1
+          fi
+
+          if [[ ! -f "RELEASE_NOTES_${version}.md" ]]; then
+            echo "::error::missing release notes file RELEASE_NOTES_${version}.md"
             exit 1
           fi
 
@@ -253,11 +258,14 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
+          NOTES_FILE="RELEASE_NOTES_${VERSION}.md"
+          test -f "$NOTES_FILE"
+
           gh release create "$VERSION" \
             --verify-tag \
             --draft \
             --title "Electrum-Ravencoin $VERSION" \
-            --notes-file RELEASE_NOTES_1.3.0rc2.md \
+            --notes-file "$NOTES_FILE" \
             release-dist/*
 
           echo "Draft release created. Do not publish it until SHA256SUMS has been signed offline."
