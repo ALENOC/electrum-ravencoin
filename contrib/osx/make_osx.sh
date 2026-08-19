@@ -211,9 +211,13 @@ info "Installing requirements..."
 # Restore the already-audited, hash-pinned build pip only for the legacy
 # hardware-wallet dependency phase; do not change the wallet dependency itself.
 info "Restoring legacy-compatible pip for hardware wallet requirements..."
-"$PYTHON" -m pip install --no-dependencies --require-hashes --no-warn-script-location \
+"$PYTHON" -m pip install --force-reinstall --no-dependencies --require-hashes --no-warn-script-location \
     -r ./contrib/deterministic-build/requirements-pip-legacy.txt ||
     fail "Could not restore legacy-compatible pip"
+
+LEGACY_PIP_VERSION=$("$PYTHON" -m pip --version | awk '{print $2}')
+[[ "$LEGACY_PIP_VERSION" == "22.3.1" ]] ||
+    fail "legacy-compatible pip version mismatch: $LEGACY_PIP_VERSION != 22.3.1"
 
 info "Installing hardware wallet requirements..."
 "$PYTHON" -m pip install --no-build-isolation --no-dependencies --no-binary :all: --only-binary cryptography \

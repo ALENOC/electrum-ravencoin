@@ -285,13 +285,13 @@ info "creating the AppImage."
     "$CACHEDIR/appimagetool_copy" --appimage-extract
     # We build a small wrapper for mksquashfs that removes the -mkfs-time option
     # as it conflicts with SOURCE_DATE_EPOCH.
-    mv "$BUILDDIR/squashfs-root/usr/lib/appimagekit/mksquashfs" "$BUILDDIR/squashfs-root/usr/lib/appimagekit/mksquashfs_orig"
-    cat > "$BUILDDIR/squashfs-root/usr/lib/appimagekit/mksquashfs" << EOF
+    mv "$BUILDDIR/squashfs-root/usr/bin/mksquashfs" "$BUILDDIR/squashfs-root/usr/bin/mksquashfs_orig"
+    cat > "$BUILDDIR/squashfs-root/usr/bin/mksquashfs" << EOF
 #!/bin/sh
 args=\$(echo "\$@" | sed -e 's/-mkfs-time 0//')
-"$BUILDDIR/squashfs-root/usr/lib/appimagekit/mksquashfs_orig" \$args
+"$BUILDDIR/squashfs-root/usr/bin/mksquashfs_orig" \$args
 EOF
-    chmod +x "$BUILDDIR/squashfs-root/usr/lib/appimagekit/mksquashfs"
+    chmod +x "$BUILDDIR/squashfs-root/usr/bin/mksquashfs"
     env VERSION="$VERSION" ARCH=x86_64 ./squashfs-root/AppRun --no-appstream --verbose "$APPDIR" "$APPIMAGE"
 )
 
