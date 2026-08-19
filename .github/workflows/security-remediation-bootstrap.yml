@@ -83,10 +83,13 @@ jobs:
             electrum/tests/test_revealer.py \
             --deselect electrum/tests/test_util.py::TestUtil::test_parse_URI_lightning_consistency
 
-      - name: Commit validated remediation and remove bootstrap
+      - name: Commit validated source remediation
         run: |
           set -euo pipefail
-          rm -f .github/remediation_payload.b64 .github/workflows/security-remediation-bootstrap.yml
+          # Workflow files are published separately through the GitHub connector,
+          # because GITHUB_TOKEN cannot update workflows in this repository.
+          git checkout HEAD -- .github/workflows/ci.yml .github/workflows/security-remediation-bootstrap.yml
+          rm -f .github/remediation_payload.b64
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
