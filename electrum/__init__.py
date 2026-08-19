@@ -48,11 +48,11 @@ else:
     raise ImportError("Running with asserts disabled. Refusing to continue. Exiting...")
 
 
-# Keep the public ElectrumX discovery list fresh in already-compiled clients.
-# The updater is deliberately availability-only: compiled server anchors and
-# operator-group trust cannot be changed by the unsigned remote list.  Its
-# daemon thread does not perform network I/O until a real Daemon-owned Network
-# instance has actually been started, which also keeps ordinary library/test
-# imports side-effect free.
+# Keep the public ElectrumX directory fresh in already-compiled clients.
+# Unsigned servers.json is discovery-only and cannot grant operator identity.
+# A separately Ed25519-signed registry may update operatorGroup trust metadata
+# after signature, expiry and anti-rollback checks. The updater thread does not
+# perform network I/O until a real Daemon-owned Network has actually started,
+# keeping ordinary library/test imports effectively side-effect free.
 from .server_list_updater import start_server_list_updater
 start_server_list_updater()
