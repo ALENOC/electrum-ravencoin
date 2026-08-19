@@ -294,11 +294,11 @@ class TestDynamicServerList(unittest.TestCase):
                     accept_signed_registry_document(directory, second, now=now)
 
     def test_builtin_registry_key_is_dedicated_and_well_formed(self):
-        self.assertEqual({"a81ee9b1b61a5dcf"}, set(TRUSTED_REGISTRY_KEYS))
-        raw = TRUSTED_REGISTRY_KEYS["a81ee9b1b61a5dcf"]
+        self.assertEqual({"d7a50f481a496f3e"}, set(TRUSTED_REGISTRY_KEYS))
+        raw = TRUSTED_REGISTRY_KEYS["d7a50f481a496f3e"]
         self.assertEqual(32, len(raw))
         self.assertEqual(
-            "a81ee9b1b61a5dcf",
+            "d7a50f481a496f3e",
             hashlib.sha256(raw).hexdigest()[:16],
         )
 
@@ -313,7 +313,7 @@ class TestDynamicServerList(unittest.TestCase):
             document,
             now=datetime.datetime(2026, 8, 20, tzinfo=datetime.timezone.utc),
         )
-        self.assertEqual(1, body["registryVersion"])
+        self.assertEqual(2, body["registryVersion"])
         self.assertEqual(
             "ALENOC",
             body["servers"]["electrumx.raventag.com"]["operatorGroup"],

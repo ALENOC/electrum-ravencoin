@@ -71,8 +71,8 @@ REGISTRY_SIGNATURE_DOMAIN = b"ALENOC-RVN-SERVER-REGISTRY-v1\x00"
 # key: the two trust domains must remain cryptographically independent.
 # key id = first 16 hex chars of SHA-256(raw Ed25519 public key).
 TRUSTED_REGISTRY_KEYS: Dict[str, bytes] = {
-    "a81ee9b1b61a5dcf": bytes.fromhex(
-        "65568ff8bab25eea4e038acafd93548918785deee6c26141ed861e4db2cc16f6"
+    "d7a50f481a496f3e": bytes.fromhex(
+        "f15e00d3e5edb0d9db31f81171a5e8716e247b53bc0e120655f665ba54b0d0c0"
     ),
 }
 

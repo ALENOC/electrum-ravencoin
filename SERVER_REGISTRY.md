@@ -9,7 +9,7 @@ The wallet has two server-directory channels with intentionally different trust 
 
 The client embeds only the public Ed25519 registry key. The current key ID is:
 
-`a81ee9b1b61a5dcf`
+`d7a50f481a496f3e`
 
 The private key must remain outside the repository, CI, release artifacts, cloud drives, issue attachments, and application data directories. Losing or compromising this private key requires a client release that rotates the embedded public trust root.
 
