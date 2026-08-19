@@ -1,0 +1,243 @@
+name: Temporary Ravencoin ElectrumX probe
+
+on:
+  push:
+    branches:
+      - feature/dynamic-electrumx-server-list
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Probe published Ravencoin ElectrumX endpoints and same-IP Core P2P
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import ipaddress
+          import json
+          import os
+          import random
+          import socket
+          import ssl
+          import struct
+          import time
+
+          CANDIDATES = [
+              ("electrumx.raventag.com", 50002, True, "CONTROL_RAVENTAG"),
+              ("162.19.153.65", 50002, True, "UPSTREAM_AND_1209K"),
+              ("electrum1.cipig.net", 20051, True, "1209K"),
+              ("electrum2.cipig.net", 20051, True, "1209K"),
+              ("electrum3.cipig.net", 20051, True, "PUBLISHED_HISTORICAL"),
+              ("electrum-rvn.moontree.com", 50002, True, "UPSTREAM_PEER"),
+              ("rvn4lyfe.com", 50002, True, "UPSTREAM_PEER"),
+              ("electrum-rvn.qortal.online", 50002, True, "PUBLISHED_QORTAL"),
+              ("electrum1-rvn.qortal.online", 50002, True, "PUBLISHED_QORTAL"),
+          ]
+
+          def resolve_ipv4(host):
+              out = []
+              try:
+                  infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+              except Exception as e:
+                  return out, f"{type(e).__name__}: {e}"
+              for info in infos:
+                  ip = info[4][0]
+                  if ip not in out:
+                      out.append(ip)
+              return out, None
+
+          def electrum_probe(host, port, use_ssl=True):
+              result = {"ok": False}
+              raw = socket.create_connection((host, port), timeout=7)
+              raw.settimeout(7)
+              sock = raw
+              if use_ssl:
+                  ctx = ssl.create_default_context()
+                  ctx.check_hostname = False
+                  ctx.verify_mode = ssl.CERT_NONE
+                  sock = ctx.wrap_socket(raw, server_hostname=host)
+                  sock.settimeout(7)
+              f = sock.makefile("rwb")
+              next_id = 0
+
+              def call(method, params):
+                  nonlocal next_id
+                  next_id += 1
+                  req = {"jsonrpc": "2.0", "id": next_id, "method": method, "params": params}
+                  f.write((json.dumps(req, separators=(",", ":")) + "\n").encode())
+                  f.flush()
+                  deadline = time.time() + 7
+                  while time.time() < deadline:
+                      line = f.readline()
+                      if not line:
+                          raise ConnectionError("EOF waiting for JSON-RPC response")
+                      obj = json.loads(line.decode("utf-8", "replace"))
+                      if obj.get("id") == next_id:
+                          return obj
+                  raise TimeoutError(method)
+
+              try:
+                  v = call("server.version", ["ALENOC-public-node-probe", ["1.1", "1.4"]])
+                  result["server_version"] = v.get("result")
+                  if v.get("error"):
+                      result["server_version_error"] = v["error"]
+                  for method, key in [
+                      ("server.features", "features"),
+                      ("blockchain.headers.subscribe", "header"),
+                      ("server.peers.subscribe", "peers"),
+                      ("server.ravencoin_backend", "ravencoin_backend"),
+                  ]:
+                      try:
+                          r = call(method, [])
+                          if r.get("error") is not None:
+                              result[key + "_error"] = r["error"]
+                          else:
+                              result[key] = r.get("result")
+                      except Exception as e:
+                          result[key + "_exception"] = f"{type(e).__name__}: {e}"
+                  result["ok"] = bool(result.get("server_version"))
+              finally:
+                  try: f.close()
+                  except Exception: pass
+                  try: sock.close()
+                  except Exception: pass
+              return result
+
+          MAGIC = b"RAVN"
+
+          def varint(n):
+              if n < 0xfd: return bytes([n])
+              if n <= 0xffff: return b"\xfd" + struct.pack("<H", n)
+              if n <= 0xffffffff: return b"\xfe" + struct.pack("<I", n)
+              return b"\xff" + struct.pack("<Q", n)
+
+          def read_varint(buf, off):
+              if off >= len(buf): raise ValueError("short varint")
+              x = buf[off]; off += 1
+              if x < 0xfd: return x, off
+              if x == 0xfd:
+                  return struct.unpack_from("<H", buf, off)[0], off + 2
+              if x == 0xfe:
+                  return struct.unpack_from("<I", buf, off)[0], off + 4
+              return struct.unpack_from("<Q", buf, off)[0], off + 8
+
+          def netaddr(ip, port):
+              packed = ipaddress.ip_address(ip).packed
+              if len(packed) == 4:
+                  packed = b"\x00" * 10 + b"\xff\xff" + packed
+              return struct.pack("<Q", 0) + packed + struct.pack(">H", port)
+
+          def recvn(sock, n):
+              chunks = []
+              left = n
+              while left:
+                  c = sock.recv(left)
+                  if not c: raise ConnectionError("EOF")
+                  chunks.append(c); left -= len(c)
+              return b"".join(chunks)
+
+          def p2p_probe(ip, port=8767):
+              s = socket.create_connection((ip, port), timeout=6)
+              s.settimeout(6)
+              try:
+                  proto = 70028
+                  now = int(time.time())
+                  ua = b"/ALENOC-node-probe:0.1/"
+                  payload = (
+                      struct.pack("<iQq", proto, 0, now)
+                      + netaddr(ip, port)
+                      + netaddr("0.0.0.0", 0)
+                      + struct.pack("<Q", random.getrandbits(64))
+                      + varint(len(ua)) + ua
+                      + struct.pack("<i", 0)
+                      + b"\x00"
+                  )
+                  cmd = b"version" + b"\x00" * 5
+                  checksum = hashlib.sha256(hashlib.sha256(payload).digest()).digest()[:4]
+                  s.sendall(MAGIC + cmd + struct.pack("<I", len(payload)) + checksum + payload)
+                  deadline = time.time() + 6
+                  while time.time() < deadline:
+                      hdr = recvn(s, 24)
+                      if hdr[:4] != MAGIC:
+                          raise ValueError("unexpected network magic " + hdr[:4].hex())
+                      command = hdr[4:16].rstrip(b"\x00").decode("ascii", "replace")
+                      plen = struct.unpack_from("<I", hdr, 16)[0]
+                      if plen > 4_000_000:
+                          raise ValueError("oversized P2P payload")
+                      body = recvn(s, plen)
+                      if command != "version":
+                          continue
+                      if len(body) < 81:
+                          raise ValueError("short version payload")
+                      remote_proto = struct.unpack_from("<i", body, 0)[0]
+                      off = 80
+                      ualen, off = read_varint(body, off)
+                      remote_ua = body[off:off+ualen].decode("utf-8", "replace")
+                      off += ualen
+                      height = struct.unpack_from("<i", body, off)[0] if off + 4 <= len(body) else None
+                      return {"open": True, "protocol": remote_proto, "user_agent": remote_ua, "start_height": height}
+                  raise TimeoutError("no version response")
+              finally:
+                  s.close()
+
+          discovered = {}
+          summary = []
+          print("=== RAVENCOIN ELECTRUMX / CORE PUBLIC PROBE ===")
+          print("timestamp_utc=", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+          for host, port, use_ssl, source in CANDIDATES:
+              print("\n---", host, port, source, "---")
+              ips, dns_err = resolve_ipv4(host)
+              print("resolved_ipv4=", ips, "dns_error=", dns_err)
+              e = None
+              try:
+                  e = electrum_probe(host, port, use_ssl)
+                  print("electrum=", json.dumps(e, sort_keys=True))
+                  for peer in e.get("peers", []) if isinstance(e, dict) else []:
+                      try:
+                          peer_ip, peer_host, features = peer
+                          discovered.setdefault(str(peer_host), {"ips": set(), "features": set()})
+                          if peer_ip:
+                              discovered[str(peer_host)]["ips"].add(str(peer_ip))
+                          for feat in features or []:
+                              discovered[str(peer_host)]["features"].add(str(feat))
+                      except Exception:
+                          pass
+              except Exception as ex:
+                  e = {"ok": False, "exception": f"{type(ex).__name__}: {ex}"}
+                  print("electrum=", json.dumps(e, sort_keys=True))
+
+              p2p = {}
+              for ip in ips[:4]:
+                  try:
+                      p2p[ip] = p2p_probe(ip, 8767)
+                  except Exception as ex:
+                      p2p[ip] = {"open": False, "error": f"{type(ex).__name__}: {ex}"}
+              print("same_ip_p2p_8767=", json.dumps(p2p, sort_keys=True))
+              summary.append({"host": host, "port": port, "source": source, "ips": ips, "electrum": e, "p2p8767": p2p})
+
+          print("\n=== PEERS DISCOVERED FROM RESPONDING ELECTRUMX SERVERS ===")
+          for host in sorted(discovered):
+              item = discovered[host]
+              print(host, "ips=", sorted(item["ips"]), "features=", sorted(item["features"]))
+
+          print("\n=== COMPACT SUMMARY ===")
+          for x in summary:
+              ev = x["electrum"] or {}
+              header = ev.get("header") if isinstance(ev, dict) else None
+              height = header.get("height") if isinstance(header, dict) else None
+              uas = [v.get("user_agent") for v in x["p2p8767"].values() if isinstance(v, dict) and v.get("user_agent")]
+              print(json.dumps({
+                  "host": x["host"], "electrum_port": x["port"], "source": x["source"],
+                  "electrum_ok": bool(ev.get("ok")) if isinstance(ev, dict) else False,
+                  "server_version": ev.get("server_version") if isinstance(ev, dict) else None,
+                  "height": height, "ips": x["ips"], "core_user_agents_on_same_ip_8767": uas,
+                  "backend_extension": ev.get("ravencoin_backend") if isinstance(ev, dict) else None,
+                  "backend_extension_error": ev.get("ravencoin_backend_error") if isinstance(ev, dict) else None,
+              }, sort_keys=True))
+          PY
