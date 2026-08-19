@@ -55,10 +55,15 @@ info "Building $pkgname..."
                 --with-directshow=yes \
                 --disable-dependency-tracking"
         elif [ $(uname) == "Darwin" ]; then
-            # macos target. Electrum only needs the QR decoder from this
-            # private ZBar build; disabling NLS avoids binding the dylib to
-            # Homebrew gettext/libiconv and keeps the packaged library
-            # self-contained across current macOS runner images.
+            # macOS target. Electrum only needs the QR decoder from this private
+            # ZBar build. NLS is disabled, but the QR text decoder itself still
+            # requires iconv. Homebrew's libiconv is keg-only, so use one
+            # provider consistently for both compile and link instead of mixing
+            # Homebrew headers with the macOS system linker defaults.
+            ICONV_PREFIX="$(brew --prefix libiconv)" || fail "Homebrew libiconv is required to build ZBar on macOS"
+            export CPPFLAGS="${CPPFLAGS:-} -I${ICONV_PREFIX}/include"
+            export LDFLAGS="${LDFLAGS:-} -L${ICONV_PREFIX}/lib"
+            export LIBS="${LIBS:-} -liconv"
             AUTOCONF_FLAGS="$AUTOCONF_FLAGS \
                 --with-x=no \
                 --enable-video=no \
