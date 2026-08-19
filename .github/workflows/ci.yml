@@ -1,6 +1,9 @@
 name: CI
 
 on:
+  push:
+    branches:
+      - feature/dynamic-electrumx-server-list
   pull_request:
 
 permissions:
@@ -8,7 +11,7 @@ permissions:
 
 jobs:
   add-electrumx-version-gate:
-    if: github.actor != 'github-actions[bot]' && github.head_ref == 'feature/dynamic-electrumx-server-list'
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - name: Check out feature branch
