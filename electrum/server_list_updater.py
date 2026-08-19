@@ -5,21 +5,24 @@
 """Runtime refresh of the public ElectrumX discovery list.
 
 The repository copy of ``electrum/servers.json`` is useful operational data, but
-it is *not* a trust root.  In particular, ``operatorGroup`` participates in the
-independent-operator quorum enforced by :mod:`electrum.network`.  Treating an
+it is *not* a trust root. In particular, ``operatorGroup`` participates in the
+independent-operator quorum enforced by :mod:`electrum.network`. Treating an
 unsigned, mutable GitHub file as authority for that field would let a repository
 or GitHub compromise mint fake independent operators.
 
-Consequently this module deliberately separates two concepts:
+This build therefore distinguishes one immutable server anchor from ordinary
+compiled discovery seeds:
 
-* the server entries compiled into the wallet are immutable security anchors;
-* a validated remote ``servers.json`` may add/update ordinary discovery seeds,
-  but may not replace/remove compiled anchors and may never grant an
-  ``operatorGroup`` to a remotely introduced host.
+* ``electrumx.raventag.com`` is the only immutable/trusted server anchor;
+* every other server is discovery data only, even if it happened to be present
+  in the compiled ``servers.json``;
+* a validated remote ``servers.json`` may add, update, or remove discovery
+  entries, but may never replace the RavenTag anchor and may never grant an
+  ``operatorGroup`` to a remote entry.
 
-That gives already-built clients a useful live server directory without moving
-any security boundary out of the binary.  A future *signed* server registry can
-safely make the trust metadata itself updateable.
+The result is intentionally fail-closed: with only one trusted operator anchor,
+any security action requiring two independent operator groups remains blocked
+until a second independently trusted anchor or a signed server registry exists.
 """
 
 from __future__ import annotations
@@ -52,13 +55,29 @@ MAX_REMOTE_SERVERS = 512
 CACHE_SCHEMA_VERSION = 1
 CACHE_FILENAME = "servers.remote.cache.json"
 
+# Only these hosts are allowed to retain security-sensitive metadata from the
+# compiled wallet. Keep this list deliberately tiny and review changes as a
+# trust-root change, not as ordinary server-list maintenance.
+TRUSTED_ANCHOR_HOSTS = frozenset({"electrumx.raventag.com"})
+
 # Capture the exact list shipped by this build before any runtime refresh can
-# replace the class attribute.  This is the immutable security baseline for
-# this process.  New remote entries are intentionally not allowed to inherit
-# or invent operator identity.
-_BUILTIN_SERVERS: Dict[str, dict] = copy.deepcopy(
+# replace the class attribute. Non-anchor entries are only startup discovery
+# seeds; after the first valid cache/remote refresh they may be updated/removed.
+_COMPILED_SERVERS: Dict[str, dict] = copy.deepcopy(
     constants.RavencoinMainnet.DEFAULT_SERVERS
 )
+
+_BUILTIN_ANCHORS: Dict[str, dict] = {
+    host: copy.deepcopy(_COMPILED_SERVERS[host])
+    for host in TRUSTED_ANCHOR_HOSTS
+    if host in _COMPILED_SERVERS
+}
+if set(_BUILTIN_ANCHORS) != set(TRUSTED_ANCHOR_HOSTS):
+    missing = sorted(set(TRUSTED_ANCHOR_HOSTS) - set(_BUILTIN_ANCHORS))
+    raise RuntimeError(f"trusted ElectrumX anchor missing from compiled list: {missing}")
+for _host, _entry in _BUILTIN_ANCHORS.items():
+    if not isinstance(_entry.get("operatorGroup"), str) or not _entry["operatorGroup"]:
+        raise RuntimeError(f"trusted ElectrumX anchor {_host!r} has no operatorGroup")
 
 _started = False
 _start_lock = threading.Lock()
@@ -68,9 +87,14 @@ class ServerListError(ValueError):
     """The remote/cache server list is malformed or outside policy."""
 
 
-def get_builtin_server_list() -> Dict[str, dict]:
-    """Return a defensive copy of the server anchors compiled into this build."""
-    return copy.deepcopy(_BUILTIN_SERVERS)
+def get_compiled_server_list() -> Dict[str, dict]:
+    """Return all server entries that happened to ship in this build."""
+    return copy.deepcopy(_COMPILED_SERVERS)
+
+
+def get_builtin_anchor_list() -> Dict[str, dict]:
+    """Return the immutable security anchors compiled into this build."""
+    return copy.deepcopy(_BUILTIN_ANCHORS)
 
 
 def _validate_optional_text(entry: Mapping[str, Any], key: str, *, max_len: int) -> Optional[str]:
@@ -87,7 +111,7 @@ def _validate_optional_text(entry: Mapping[str, Any], key: str, *, max_len: int)
 def sanitize_remote_server_list(value: Any) -> Dict[str, dict]:
     """Validate untrusted JSON and return only non-security server metadata.
 
-    ``operatorGroup`` is intentionally ignored even when present.  Ports are
+    ``operatorGroup`` is intentionally ignored even when present. Ports are
     validated by ``ServerAddr`` so DNS names, IP literals, and onion hosts obey
     the same parser the network layer will use later.
     """
@@ -160,17 +184,17 @@ def parse_remote_server_list(text: str) -> Dict[str, dict]:
 
 
 def build_effective_server_list(remote_servers: Mapping[str, dict]) -> Dict[str, dict]:
-    """Merge remote discovery entries into the immutable compiled baseline.
+    """Build the live list from one immutable anchor plus remote discovery.
 
-    A compiled host always wins in full.  This prevents an unsigned remote file
-    from changing its port, removing it, or altering security metadata.  Hosts
-    first introduced remotely are fully updateable/removable on later refreshes
-    but cannot count as independent security operators.
+    The RavenTag anchor always wins in full. Every other host comes from the
+    validated remote document, even if it was also present in the compiled file.
+    Thus non-anchor compiled seeds can be updated or retired without rebuilding
+    the client, while the unsigned document cannot alter the sole trust anchor.
     """
     sanitized = sanitize_remote_server_list(dict(remote_servers))
-    effective = get_builtin_server_list()
+    effective = get_builtin_anchor_list()
     for host, entry in sanitized.items():
-        if host in _BUILTIN_SERVERS:
+        if host in TRUSTED_ANCHOR_HOSTS:
             continue
         effective[host] = copy.deepcopy(entry)
     return effective
