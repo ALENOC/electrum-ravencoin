@@ -1,7 +1,7 @@
 {
   "registry": {
-    "expiresAt": "2027-08-19T08:20:00+00:00",
-    "generatedAt": "2026-08-19T08:20:00+00:00",
+    "expiresAt": "2027-08-19T08:15:00+00:00",
+    "generatedAt": "2026-08-19T08:15:00+00:00",
     "registryVersion": 1,
     "schemaVersion": 1,
     "servers": {
@@ -31,6 +31,6 @@
   "signature": {
     "algorithm": "ed25519",
     "keyId": "a81ee9b1b61a5dcf",
-    "value": "gVmXrOK0GXXyqANg3fOK7qJLcR0Z+04OS/HdUkFYihlSdOUtQz2KjpTmIle7zxQBA9N3BZxtnqo44uwCK/nlCQ=="
+    "value": "z5K6ANuYm2QOAaPEY8+VOmaUN8Vb2EgxJwH5KVn5dzSUDxMpxV7wk2nVGqqYoehts3ZMsL5FFcDibqY1aRBfBw=="
   }
 }
