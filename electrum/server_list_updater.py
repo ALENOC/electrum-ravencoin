@@ -247,6 +247,21 @@ def load_cached_remote_servers(cache_dir: str) -> Optional[Tuple[Dict[str, dict]
         return None
 
 
+async def _read_limited_http_response(response: Any) -> str:
+    """Read at most MAX_REMOTE_BYTES, including decompressed response bytes."""
+    response.raise_for_status()
+    content_length = response.content_length
+    if content_length is not None and content_length > MAX_REMOTE_BYTES:
+        raise ServerListError("remote server list exceeds advertised size limit")
+    raw = await response.content.read(MAX_REMOTE_BYTES + 1)
+    if len(raw) > MAX_REMOTE_BYTES:
+        raise ServerListError("remote server list exceeds size limit")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ServerListError("remote server list is not UTF-8") from exc
+
+
 def _notify_network(network: Any) -> None:
     try:
         loop = network.asyncio_loop
@@ -292,7 +307,10 @@ def _worker() -> None:
 
         try:
             text = Network.send_http_on_proxy(
-                "get", REMOTE_SERVER_LIST_URL, timeout=HTTP_TIMEOUT_SECONDS
+                "get",
+                REMOTE_SERVER_LIST_URL,
+                timeout=HTTP_TIMEOUT_SECONDS,
+                on_finish=_read_limited_http_response,
             )
             remote_servers = parse_remote_server_list(text)
             changed = apply_remote_server_list(remote_servers)
