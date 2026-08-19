@@ -13,6 +13,27 @@
     "s": "50002",
     "version": "1.11"
   },
+  "electrum1.cipig.net": {
+    "backend_policy": "discovery-only; operator-confirmed Ravencoin Core 4.8.0; hardened server.ravencoin_backend capability pending; live capability required",
+    "pruning": "-",
+    "s": "20051",
+    "t": "10051",
+    "version": "1.11"
+  },
+  "electrum2.cipig.net": {
+    "backend_policy": "discovery-only; operator-confirmed Ravencoin Core 4.8.0; hardened server.ravencoin_backend capability pending; live capability required",
+    "pruning": "-",
+    "s": "20051",
+    "t": "10051",
+    "version": "1.11"
+  },
+  "electrum3.cipig.net": {
+    "backend_policy": "discovery-only; operator-confirmed Ravencoin Core 4.8.0; hardened server.ravencoin_backend capability pending; live capability required",
+    "pruning": "-",
+    "s": "20051",
+    "t": "10051",
+    "version": "1.11"
+  },
   "rvn4lyfe.com": {
     "backend_policy": "discovery-only; live capability required",
     "pruning": "-",
