@@ -7,9 +7,18 @@ FROM debian:buster@sha256:233c3bbc892229c82da7231980d50adceba4db56a08c0b7053a485
 ENV LC_ALL=C.UTF-8 LANG=C.UTF-8
 ENV DEBIAN_FRONTEND=noninteractive
 
-# need ca-certificates before using snapshot packages
-RUN apt update -qq > /dev/null && apt install -qq --yes --no-install-recommends \
-    ca-certificates
+# Debian Buster is EOL and its normal mirrors no longer publish a Release file.
+# Bootstrap only ca-certificates from Debian's immutable archive, then switch to
+# the timestamp-pinned snapshot below for the actual deterministic toolchain.
+RUN printf '%s\n' \
+        'deb http://archive.debian.org/debian buster main' \
+        > /etc/apt/sources.list && \
+    printf '%s\n' \
+        'Acquire::Check-Valid-Until "false";' \
+        > /etc/apt/apt.conf.d/99electrum-archive && \
+    apt-get update -q && \
+    apt-get install -qy --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # pin the distro packages
 COPY apt.sources.list /etc/apt/sources.list
