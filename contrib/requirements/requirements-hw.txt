@@ -11,6 +11,10 @@ keepkey>=6.3.1
 
 # device plugin: ledger
 # note: btchip-python only needed for "legacy" protocol and HW.1 support
+# note: the btchip-python 0.1.32 sdist declares an invalid PEP 440 requirement
+#       ("python-pyscard>=1.6.12-4build1") that setuptools >=66 rejects, so pip
+#       cannot build it. Run contrib/install_btchip_python.sh first; see
+#       docs/building.md.
 # note: ledger-bitcoin==0.2.2 added new deps we don't want to bundle. otherwise it should be ok to use.
 #       see https://github.com/LedgerHQ/app-bitcoin-new/issues/192
 btchip-python>=0.1.32

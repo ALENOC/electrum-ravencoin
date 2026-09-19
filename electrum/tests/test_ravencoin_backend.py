@@ -22,8 +22,8 @@ def version_text(version_number):
     return "{}.{}".format(result, build) if build else result
 
 
-CERTIFIED_REPOSITORY = "2miners/Ravencoin"
-CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
+CERTIFIED_REPOSITORY = "RavenProject/Ravencoin"
+CERTIFIED_COMMIT = "22549129888d02e0e08fcdb9f96f3c699167e774"
 OTHER_COMMIT = "a" * 40
 
 
@@ -74,6 +74,37 @@ class TestRavencoinBackendEvidence(ElectrumTestCase):
     def classify(self, response):
         evidence = parse_ravencoin_backend_evidence(response)
         return classify_backend_evidence(evidence, now=NOW)
+
+    def test_subversion_with_uacomment_is_accepted(self):
+        # Ravencoin Core appends a BIP 14 comment when uacomment is set
+        response = backend_response()
+        response["backend"]["subversion"] = (
+            "/Ravencoin:4.8.0(RG5MujXzxARjWChWdU2awbAQa9ZCH52yrh)/"
+        )
+        evidence = parse_ravencoin_backend_evidence(response)
+        self.assertEqual("4.8.0", evidence.core_version)
+
+    def test_subversion_with_empty_uacomment_is_accepted(self):
+        response = backend_response()
+        response["backend"]["subversion"] = "/Ravencoin:4.8.0()/"
+        parse_ravencoin_backend_evidence(response)
+
+    def test_subversion_comment_cannot_forge_a_second_user_agent(self):
+        for forged in ("/Ravencoin:4.8.0(x)/Ravencoin:9.9.9/",
+                       "/Ravencoin:4.8.0(nested(paren))/",
+                       "/Ravencoin:4.8.0(sl/ash)/",
+                       "/Satoshi:4.8.0/"):
+            with self.subTest(subversion=forged):
+                response = backend_response()
+                response["backend"]["subversion"] = forged
+                with self.assertRaises(BackendEvidenceError):
+                    parse_ravencoin_backend_evidence(response)
+
+    def test_subversion_version_must_still_match_numeric_version(self):
+        response = backend_response()
+        response["backend"]["subversion"] = "/Ravencoin:4.9.0(comment)/"
+        with self.assertRaises(BackendEvidenceError):
+            parse_ravencoin_backend_evidence(response)
 
     def test_exact_server_contract_parses_without_replacing_chain_proof(self):
         evidence = parse_ravencoin_backend_evidence(backend_response())
@@ -131,7 +162,7 @@ class TestRavencoinBackendEvidence(ElectrumTestCase):
     def test_same_version_different_repository_is_not_inherited(self):
         self.assertEqual(
             BackendEligibilityState.CORE_IDENTITY_CONFLICT,
-            self.classify(backend_response(repository="RavenProject/Ravencoin")),
+            self.classify(backend_response(repository="2miners/Ravencoin")),
         )
 
     def test_server_reporting_no_identity_cannot_be_placed_in_the_policy(self):
@@ -189,7 +220,7 @@ class TestRavencoinBackendEvidence(ElectrumTestCase):
         from electrum import core_safety_policy
         baseline = core_safety_policy.load_baseline()
         revoked = dict(baseline)
-        entry = dict(baseline["releases"][0])
+        entry = dict(next(e for e in baseline["releases"] if e["status"] == "KNOWN_SAFE"))
         entry.update({"status": "REVOKED", "revocationReason": "consensus regression"})
         entry.pop("certification", None)
         revoked["releases"] = [entry]
@@ -203,7 +234,7 @@ class TestRavencoinBackendEvidence(ElectrumTestCase):
         from electrum import core_safety_policy
         baseline = core_safety_policy.load_baseline()
         unsafe = dict(baseline)
-        entry = dict(baseline["releases"][0])
+        entry = dict(next(e for e in baseline["releases"] if e["status"] == "KNOWN_SAFE"))
         entry["status"] = "KNOWN_UNSAFE"
         entry["certification"] = {"profile": "rvn-consensus-2026-08-v1", "result": "FAIL"}
         unsafe["releases"] = [entry]
