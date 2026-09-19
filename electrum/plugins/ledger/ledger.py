@@ -334,35 +334,13 @@ class Ledger_Client(HardwareClientBase, ABC):
         """The 'real' constructor, that automatically decides which subclass to use."""
         if LedgerPlugin.is_hw1(device.product_key):
             return Ledger_Client_Legacy_HW1(*args, **kwargs, device=device)
-        # for nano S or newer hw, decide which client impl to use based on software/firmware version:
+        # for nano S or newer hw, Ravencoin uses the legacy client (btchip):
         hid_device = HID()
         hid_device.path = device.path
         hid_device.open()
 
-        transport = ledger_bitcoin.TransportClient("hid", hid=hid_device)
-
-        try:
-            cl = ledger_bitcoin.createClient(transport, chain=get_chain())
-
-            # This will fail for RVN but not for BTC
-            cl.get_master_fingerprint()
-        except (
-            ledger_bitcoin.exception.errors.InsNotSupportedError,
-            ledger_bitcoin.exception.errors.ClaNotSupportedError,
-        ) as e:
-            # This can happen on very old versions.
-            # E.g. with a "nano s", with bitcoin app 1.1.10, SE 1.3.1, MCU 1.0,
-            #      - on machine one, ghost43 got InsNotSupportedError
-            #      - on machine two, thomasv got ClaNotSupportedError
-            #      unclear why the different exceptions, ledger_bitcoin version 0.2.1 in both cases
-            _logger.info(
-                f"ledger_bitcoin.createClient() got exc: {e}. falling back to old plugin."
-            )
-            cl = None
-        if isinstance(cl, ledger_bitcoin.client.NewClient):
-            return Ledger_Client_New(hid_device, *args, **kwargs)
-        else:
-            return Ledger_Client_Legacy(hid_device, *args, **kwargs)
+        # RVN is only on legacy
+        return Ledger_Client_Legacy(hid_device, *args, **kwargs)
 
     def __init__(self, *, plugin: HW_PluginBase):
         HardwareClientBase.__init__(self, plugin=plugin)
