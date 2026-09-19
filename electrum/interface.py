@@ -389,6 +389,14 @@ def _get_cert_path_for_host(*, config: 'SimpleConfig', host: str) -> str:
     return os.path.join(config.path, 'certs', filename)
 
 
+
+#: How often a single header chunk may fail verification before the server is
+#: given up on. A server that cannot produce a verifiable chunk will not start
+#: doing so on the next attempt, and the wallet needs the interface to either
+#: progress or fail visibly.
+MAX_UNVERIFIABLE_CHUNK_TRIES = 3
+
+
 class Interface(Logger):
 
     LOGGING_SHORTCUT = 'i'
@@ -958,6 +966,8 @@ class Interface(Logger):
             next_height = self.tip
         last = None
         got_less_than_spacing = False
+        unverifiable_chunk_height = None
+        unverifiable_chunk_tries = 0
         while last is None or height <= next_height:
             prev_last, prev_height = last, height
             if next_height > height + 10:
@@ -972,6 +982,18 @@ class Interface(Logger):
                 if not could_connect:
                     if height <= constants.net.max_checkpoint():
                         raise GracefulDisconnect('server chain conflicts with checkpoints or genesis')
+                    # A chunk the server cannot serve in a verifiable form is not a
+                    # transient failure. Retrying it forever keeps the interface from
+                    # ever becoming ready, so the wallet reports itself as offline
+                    # while quietly hammering the same request once a second.
+                    if height == unverifiable_chunk_height:
+                        unverifiable_chunk_tries += 1
+                        if unverifiable_chunk_tries >= MAX_UNVERIFIABLE_CHUNK_TRIES:
+                            raise GracefulDisconnect(
+                                f'server cannot serve a verifiable header chunk at height {height}')
+                    else:
+                        unverifiable_chunk_height = height
+                        unverifiable_chunk_tries = 1
                     last, height = await self.step(height)
                     continue
 
