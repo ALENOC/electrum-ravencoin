@@ -1,7 +1,7 @@
 import re
 from typing import Tuple
 
-ELECTRUM_VERSION = "1.3.0rc3"  # version of the client package
+ELECTRUM_VERSION = "1.3.1"  # version of the client package
 APK_VERSION = "4.4.6.0"  # read by buildozer.spec
 
 PROTOCOL_VERSION = "1.11"  # protocol version requested
