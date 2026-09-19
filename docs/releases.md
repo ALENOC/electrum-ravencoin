@@ -3,7 +3,7 @@
 Documentation: [Home](../README.md) · [Docs index](README.md) ·
 [Building](building.md) · [Core certification](core-certification.md)
 
-The maintained release is **1.3.1**, published on the
+The maintained release is **1.3.2**, published on the
 [releases page](https://github.com/ALENOC/electrum-ravencoin/releases) with a
 source distribution, a Linux x86_64 AppImage, Windows executables and an x86_64
 macOS DMG. It must not be confused with upstream Electrum binaries or with a
