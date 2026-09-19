@@ -75,6 +75,37 @@ class TestRavencoinBackendEvidence(ElectrumTestCase):
         evidence = parse_ravencoin_backend_evidence(response)
         return classify_backend_evidence(evidence, now=NOW)
 
+    def test_subversion_with_uacomment_is_accepted(self):
+        # Ravencoin Core appends a BIP 14 comment when uacomment is set
+        response = backend_response()
+        response["backend"]["subversion"] = (
+            "/Ravencoin:4.8.0(RG5MujXzxARjWChWdU2awbAQa9ZCH52yrh)/"
+        )
+        evidence = parse_ravencoin_backend_evidence(response)
+        self.assertEqual("4.8.0", evidence.core_version)
+
+    def test_subversion_with_empty_uacomment_is_accepted(self):
+        response = backend_response()
+        response["backend"]["subversion"] = "/Ravencoin:4.8.0()/"
+        parse_ravencoin_backend_evidence(response)
+
+    def test_subversion_comment_cannot_forge_a_second_user_agent(self):
+        for forged in ("/Ravencoin:4.8.0(x)/Ravencoin:9.9.9/",
+                       "/Ravencoin:4.8.0(nested(paren))/",
+                       "/Ravencoin:4.8.0(sl/ash)/",
+                       "/Satoshi:4.8.0/"):
+            with self.subTest(subversion=forged):
+                response = backend_response()
+                response["backend"]["subversion"] = forged
+                with self.assertRaises(BackendEvidenceError):
+                    parse_ravencoin_backend_evidence(response)
+
+    def test_subversion_version_must_still_match_numeric_version(self):
+        response = backend_response()
+        response["backend"]["subversion"] = "/Ravencoin:4.9.0(comment)/"
+        with self.assertRaises(BackendEvidenceError):
+            parse_ravencoin_backend_evidence(response)
+
     def test_exact_server_contract_parses_without_replacing_chain_proof(self):
         evidence = parse_ravencoin_backend_evidence(backend_response())
         self.assertEqual("4.8.0", evidence.core_version)

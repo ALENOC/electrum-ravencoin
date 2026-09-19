@@ -23,7 +23,15 @@ MINIMUM_SAFE_CORE_STRING = "4.8.0"
 MAX_BACKEND_EVIDENCE_AGE = 300
 MAX_BACKEND_CLOCK_SKEW = 300
 _VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?$")
-_SUBVERSION_RE = re.compile(r"^/Ravencoin:([0-9]+(?:\.[0-9]+){2,3})/$")
+# BIP 14 user agent: /Name:version(comment)/. Ravencoin Core appends the
+# parenthesised part whenever the node is run with uacomment set, so the
+# comment must be tolerated. Its content is operator supplied and is never
+# interpreted: only the version in front of it is trusted, and it still has to
+# agree with backend.versionNumber. Slashes and nested parentheses stay
+# excluded so a comment cannot forge a second user agent section.
+_SUBVERSION_RE = re.compile(
+    r"^/Ravencoin:([0-9]+(?:\.[0-9]+){2,3})(?:\([^()/]{0,256}\))?/$"
+)
 
 
 class BackendEligibilityState(str, Enum):
