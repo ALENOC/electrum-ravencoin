@@ -63,9 +63,30 @@ git clone https://github.com/ALENOC/electrum-ravencoin.git
 cd electrum-ravencoin
 python3 -m venv .venv
 . .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+./contrib/install_btchip_python.sh
 python -m pip install -e ".[full]"
-python -m electrum.electrum_ravencoin --help
+./contrib/make_libsecp256k1.sh
+./run_electrum --help
 ```
+
+Two steps in that sequence are easy to miss:
+
+* `contrib/install_btchip_python.sh` installs the Ledger legacy dependency
+  `btchip-python`. Its published sdist declares an invalid PEP 440 requirement,
+  so setuptools 66 and newer reject it and `pip install -e ".[full]"` aborts
+  with `'extras_require' must be a dictionary whose values are strings or lists
+  of strings containing valid project/version requirement specifiers`. The
+  script downloads the sdist, verifies its sha256 digest, repairs the version
+  string and installs it. Skip the step only if you install without the `full`
+  extra, which leaves hardware wallet support out.
+* `contrib/make_libsecp256k1.sh` builds the native `libsecp256k1` library into
+  the `electrum/` directory. Without it, startup fails with
+  `ImportError: Failed to load libsecp256k1`.
+
+The wallet is started with `./run_electrum` from the source tree, or with the
+`electrum_ravencoin` console script that the install places on `PATH`. There is
+no `electrum.electrum_ravencoin` module to run with `python -m`.
 
 The exact optional extras vary by platform. See [Building](docs/building.md)
 for native dependencies and GUI/hardware options.
