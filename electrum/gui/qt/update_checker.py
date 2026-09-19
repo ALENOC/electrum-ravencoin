@@ -14,9 +14,12 @@ from electrum import constants
 from electrum import ecc
 from electrum.i18n import _
 from electrum.util import make_aiohttp_session
-from electrum.logging import Logger
+from electrum.logging import Logger, get_logger
 from electrum.network import Network
-from electrum._vendor.distutils.version import StrictVersion
+from electrum.version import parse_version
+
+
+_logger = get_logger(__name__)
 
 
 class UpdateCheck(QDialog, Logger):
@@ -74,8 +77,14 @@ class UpdateCheck(QDialog, Logger):
         self.pb.hide()
 
     @staticmethod
-    def is_newer(latest_version):
-        return latest_version > StrictVersion(version.ELECTRUM_VERSION)
+    def is_newer(latest_version: str) -> bool:
+        try:
+            return parse_version(latest_version) > parse_version(version.ELECTRUM_VERSION)
+        except ValueError as e:
+            # this runs from a Qt signal handler on the main window, so an
+            # unparsable announcement must not propagate
+            _logger.info(f"cannot compare versions: {repr(e)}")
+            return False
 
     def update_view(self, latest_version=None):
         if latest_version:
@@ -128,7 +137,7 @@ class UpdateCheckThread(QThread, Logger):
                         break
                 else:
                     raise Exception('no valid signature for version announcement')
-                return StrictVersion(version_num.strip())
+                return version_num.strip()
 
     def run(self):
         if not self.network:
