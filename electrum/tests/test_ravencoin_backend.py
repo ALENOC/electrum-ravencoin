@@ -22,8 +22,8 @@ def version_text(version_number):
     return "{}.{}".format(result, build) if build else result
 
 
-CERTIFIED_REPOSITORY = "2miners/Ravencoin"
-CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
+CERTIFIED_REPOSITORY = "RavenProject/Ravencoin"
+CERTIFIED_COMMIT = "22549129888d02e0e08fcdb9f96f3c699167e774"
 OTHER_COMMIT = "a" * 40
 
 
@@ -162,7 +162,7 @@ class TestRavencoinBackendEvidence(ElectrumTestCase):
     def test_same_version_different_repository_is_not_inherited(self):
         self.assertEqual(
             BackendEligibilityState.CORE_IDENTITY_CONFLICT,
-            self.classify(backend_response(repository="RavenProject/Ravencoin")),
+            self.classify(backend_response(repository="2miners/Ravencoin")),
         )
 
     def test_server_reporting_no_identity_cannot_be_placed_in_the_policy(self):
@@ -220,7 +220,7 @@ class TestRavencoinBackendEvidence(ElectrumTestCase):
         from electrum import core_safety_policy
         baseline = core_safety_policy.load_baseline()
         revoked = dict(baseline)
-        entry = dict(baseline["releases"][0])
+        entry = dict(next(e for e in baseline["releases"] if e["status"] == "KNOWN_SAFE"))
         entry.update({"status": "REVOKED", "revocationReason": "consensus regression"})
         entry.pop("certification", None)
         revoked["releases"] = [entry]
@@ -234,7 +234,7 @@ class TestRavencoinBackendEvidence(ElectrumTestCase):
         from electrum import core_safety_policy
         baseline = core_safety_policy.load_baseline()
         unsafe = dict(baseline)
-        entry = dict(baseline["releases"][0])
+        entry = dict(next(e for e in baseline["releases"] if e["status"] == "KNOWN_SAFE"))
         entry["status"] = "KNOWN_UNSAFE"
         entry["certification"] = {"profile": "rvn-consensus-2026-08-v1", "result": "FAIL"}
         unsafe["releases"] = [entry]
