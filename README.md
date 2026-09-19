@@ -47,14 +47,20 @@ to the BIE3/scrypt encryption envelope after a successful unlock.
 
 ## Download
 
-No maintained ALENOC binary release is being published yet. Run from source
-after reviewing the current release notes, or build a local package using
-[Building](docs/building.md). Do not treat an upstream Electrum binary as an
-ALENOC-certified release.
+The maintained release is **1.3.1**. Binaries are published on the
+[releases page](https://github.com/ALENOC/electrum-ravencoin/releases) as a
+source distribution, a Linux x86_64 AppImage, Windows executables from the
+deterministic Wine build, and an x86_64 macOS DMG. Read
+[RELEASE_NOTES_1.3.1.md](RELEASE_NOTES_1.3.1.md) before installing.
 
-When a maintained binary is published, verify its checksums and signature using
-the release instructions before running it. Until then, source installation is
-the reproducible path.
+Verify what you download before running it: check the artifact against the
+`SHA256SUMS` manifest, and check that manifest against the detached Ed25519
+release signature, as described in [Release signing](RELEASE_SIGNING.md). An
+artifact that fails either check is not a maintained release. Do not treat an
+upstream Electrum binary as an ALENOC-certified release.
+
+Running from source stays fully supported and is the reproducible path; see
+[Building](docs/building.md).
 
 ## Quick start from source
 
