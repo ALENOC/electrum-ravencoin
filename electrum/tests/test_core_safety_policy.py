@@ -10,7 +10,10 @@ from electrum import core_safety_policy as policy
 
 from . import ElectrumTestCase
 
-CERTIFIED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
+CERTIFIED_REPOSITORY = "RavenProject/Ravencoin"
+CERTIFIED_COMMIT = "22549129888d02e0e08fcdb9f96f3c699167e774"
+REVOKED_REPOSITORY = "2miners/Ravencoin"
+REVOKED_COMMIT = "b60f50e04f1fba425b28804e61be2694faaf3469"
 OTHER_COMMIT = "c" * 40
 
 
@@ -23,7 +26,7 @@ def keypair():
 
 
 def safe_entry(commit=CERTIFIED_COMMIT, version="4.8.0",
-               repository="2miners/Ravencoin"):
+               repository=CERTIFIED_REPOSITORY):
     return {
         "repository": repository,
         "tag": "v" + version,
@@ -68,11 +71,25 @@ class TestBuiltInBaseline(ElectrumTestCase):
     def test_baseline_is_valid_and_certifies_only_the_anchor(self):
         baseline = policy.load_baseline()
         policy.validate_body(baseline)
-        self.assertEqual(1, len(baseline["releases"]))
-        entry = baseline["releases"][0]
-        self.assertEqual("2miners/Ravencoin", entry["repository"])
+        certified = [e for e in baseline["releases"] if e["status"] == "KNOWN_SAFE"]
+        self.assertEqual(1, len(certified))
+        entry = certified[0]
+        self.assertEqual(CERTIFIED_REPOSITORY, entry["repository"])
         self.assertEqual(CERTIFIED_COMMIT, entry["commit"])
-        self.assertEqual("KNOWN_SAFE", entry["status"])
+
+    def test_baseline_refuses_the_superseded_anchor(self):
+        baseline = policy.load_baseline()
+        entry = policy.lookup(baseline, REVOKED_REPOSITORY, REVOKED_COMMIT)
+        self.assertIsNotNone(entry)
+        self.assertEqual("REVOKED", entry["status"])
+
+    def test_baseline_mirrors_the_signed_policy_version(self):
+        # the built-in set is the release set of signed policy v3
+        self.assertEqual(3, policy.load_baseline()["policyVersion"])
+
+    def test_baseline_does_not_expire(self):
+        # a built-in baseline that expires would leave the wallet with no policy
+        self.assertNotIn("expiresAt", policy.load_baseline())
 
     def test_baseline_contains_no_hypothetical_future_release(self):
         baseline = policy.load_baseline()
@@ -82,11 +99,11 @@ class TestBuiltInBaseline(ElectrumTestCase):
     def test_lookup_matches_identity_not_version(self):
         baseline = policy.load_baseline()
         self.assertIsNotNone(
-            policy.lookup(baseline, "2miners/Ravencoin", CERTIFIED_COMMIT))
+            policy.lookup(baseline, CERTIFIED_REPOSITORY, CERTIFIED_COMMIT))
         self.assertIsNone(
-            policy.lookup(baseline, "2miners/Ravencoin", OTHER_COMMIT))
+            policy.lookup(baseline, CERTIFIED_REPOSITORY, OTHER_COMMIT))
         self.assertIsNone(
-            policy.lookup(baseline, "RavenProject/Ravencoin", CERTIFIED_COMMIT))
+            policy.lookup(baseline, REVOKED_REPOSITORY, CERTIFIED_COMMIT))
 
 
 class TestPolicySignature(ElectrumTestCase):
@@ -161,8 +178,8 @@ class TestPolicyStore(ElectrumTestCase):
         with tempfile.TemporaryDirectory() as cache_dir:
             store = policy.PolicyStore(cache_dir)
             effective = store.effective()
-            self.assertEqual(1, len(effective["releases"]))
-            self.assertIsNotNone(policy.lookup(effective, "2miners/Ravencoin",
+            self.assertEqual(2, len(effective["releases"]))
+            self.assertIsNotNone(policy.lookup(effective, CERTIFIED_REPOSITORY,
                                                CERTIFIED_COMMIT))
 
     def test_corrupt_cache_is_ignored(self):
@@ -170,14 +187,14 @@ class TestPolicyStore(ElectrumTestCase):
             with open(os.path.join(cache_dir, policy.POLICY_CACHE_FILENAME), "w") as f:
                 f.write("{not json")
             store = policy.PolicyStore(cache_dir)
-            self.assertEqual(1, len(store.effective()["releases"]))
+            self.assertEqual(2, len(store.effective()["releases"]))
 
     def test_unsigned_cache_is_never_trusted(self):
         with tempfile.TemporaryDirectory() as cache_dir:
             with open(os.path.join(cache_dir, policy.POLICY_CACHE_FILENAME), "w") as f:
                 json.dump({"policy": body(releases=[safe_entry(commit=OTHER_COMMIT)])}, f)
             store = policy.PolicyStore(cache_dir)
-            self.assertIsNone(policy.lookup(store.effective(), "2miners/Ravencoin",
+            self.assertIsNone(policy.lookup(store.effective(), CERTIFIED_REPOSITORY,
                                             OTHER_COMMIT))
 
     def test_accepted_policy_is_cached_and_survives_reload(self):
@@ -197,7 +214,7 @@ class TestPolicyStore(ElectrumTestCase):
                 reloaded = policy.PolicyStore(cache_dir)
                 self.assertEqual(5, reloaded.policy_version)
                 self.assertIsNotNone(policy.lookup(reloaded.effective(),
-                                                   "2miners/Ravencoin", OTHER_COMMIT))
+                                                   CERTIFIED_REPOSITORY, OTHER_COMMIT))
         finally:
             policy.TRUSTED_POLICY_KEYS.clear()
             policy.TRUSTED_POLICY_KEYS.update(original)
@@ -266,7 +283,7 @@ class TestPolicyStore(ElectrumTestCase):
                 self.assertEqual(9, reopened.policy_version)
                 self.assertIsNone(
                     policy.lookup(
-                        reopened.effective(), "2miners/Ravencoin", OTHER_COMMIT
+                        reopened.effective(), CERTIFIED_REPOSITORY, OTHER_COMMIT
                     )
                 )
         finally:
@@ -286,7 +303,7 @@ class TestPolicyStore(ElectrumTestCase):
                 revoked.pop("certification")
                 store.accept_remote(sign(private_key, key_id,
                                          body(version=6, releases=[revoked])))
-                entry = policy.lookup(store.effective(), "2miners/Ravencoin",
+                entry = policy.lookup(store.effective(), CERTIFIED_REPOSITORY,
                                       CERTIFIED_COMMIT)
                 self.assertEqual("REVOKED", entry["status"])
                 with self.assertRaises(policy.PolicyError):
@@ -298,14 +315,14 @@ class TestPolicyStore(ElectrumTestCase):
     def test_remote_policy_cannot_rehabilitate_a_baseline_refusal(self):
         baseline = policy.load_baseline()
         unsafe = dict(baseline)
-        entry = dict(baseline["releases"][0])
+        entry = dict(next(e for e in baseline["releases"] if e["status"] == "KNOWN_SAFE"))
         entry["status"] = "KNOWN_UNSAFE"
         entry["certification"] = {"profile": policy.REQUIRED_SAFETY_PROFILE,
                                   "result": "FAIL"}
         unsafe["releases"] = [entry]
         merged = policy.merge(unsafe, body(version=9, releases=[safe_entry()]))
         self.assertEqual("KNOWN_UNSAFE",
-                         policy.lookup(merged, "2miners/Ravencoin",
+                         policy.lookup(merged, CERTIFIED_REPOSITORY,
                                        CERTIFIED_COMMIT)["status"])
 
     def test_policy_for_another_profile_is_refused(self):
@@ -385,7 +402,7 @@ class TestRollbackHighWaterMark(ElectrumTestCase):
         with tempfile.TemporaryDirectory() as cache_dir:
             store = self._store_with(cache_dir, private_key, key_id, 12,
                                      releases=[revoked])
-            entry = policy.lookup(store.effective(), "2miners/Ravencoin",
+            entry = policy.lookup(store.effective(), CERTIFIED_REPOSITORY,
                                   CERTIFIED_COMMIT)
             self.assertEqual("REVOKED", entry["status"])
             original = dict(policy.TRUSTED_POLICY_KEYS)
@@ -439,7 +456,7 @@ class TestRollbackHighWaterMark(ElectrumTestCase):
                 store.accept_remote(v3_document)
                 self.assertEqual(
                     "KNOWN_SAFE",
-                    policy.lookup(store.effective(), "2miners/Ravencoin",
+                    policy.lookup(store.effective(), CERTIFIED_REPOSITORY,
                                  OTHER_COMMIT)["status"])
 
                 revoked = dict(safe_entry(commit=OTHER_COMMIT))
@@ -450,7 +467,7 @@ class TestRollbackHighWaterMark(ElectrumTestCase):
                                          body(version=5, releases=[revoked])))
                 self.assertEqual(
                     "REVOKED",
-                    policy.lookup(store.effective(), "2miners/Ravencoin",
+                    policy.lookup(store.effective(), CERTIFIED_REPOSITORY,
                                  OTHER_COMMIT)["status"])
 
                 # Attacker overwrites only the cache with the older, still
@@ -467,7 +484,7 @@ class TestRollbackHighWaterMark(ElectrumTestCase):
                 # must not read back as KNOWN_SAFE. The baseline never
                 # mentions it, so the honest outcome is "not present".
                 reloaded_entry = policy.lookup(reopened.effective(),
-                                               "2miners/Ravencoin", OTHER_COMMIT)
+                                               CERTIFIED_REPOSITORY, OTHER_COMMIT)
                 self.assertIsNone(reloaded_entry)
                 # And a direct network replay of that same stale policy is
                 # refused too.
@@ -504,7 +521,7 @@ class TestRollbackHighWaterMark(ElectrumTestCase):
                 # effective, and its version must not raise the floor either
                 # (a refused document is not "accepted at a lower bar").
                 self.assertIsNone(
-                    policy.lookup(reopened.effective(), "2miners/Ravencoin",
+                    policy.lookup(reopened.effective(), CERTIFIED_REPOSITORY,
                                  OTHER_COMMIT))
                 self.assertLess(reopened.policy_version, 7)
                 self.assertGreaterEqual(reopened.policy_version, 3)
@@ -597,7 +614,7 @@ class TestRollbackLimits(ElectrumTestCase):
                 self.assertEqual(baseline_version, reopened.policy_version)
                 # And the baseline still governs what may be trusted at all.
                 effective = reopened.effective()
-                self.assertEqual(1, len(effective["releases"]))
+                self.assertEqual(2, len(effective["releases"]))
         finally:
             policy.TRUSTED_POLICY_KEYS.clear()
             policy.TRUSTED_POLICY_KEYS.update(original)

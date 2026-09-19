@@ -1,36 +1,37 @@
 {
-  "schemaVersion": 1,
-  "policyVersion": 2,
-  "generatedAt": "2026-08-15T00:00:00+00:00",
-  "safetyProfile": "rvn-consensus-2026-08-v1",
-  "note": "Built-in baseline compiled into this wallet build. It is used when no signed remote policy has been accepted, and a remote policy may add or restrict entries but may never rehabilitate anything refused here. Identity is repository plus commit; a version string on its own never matches.",
-  "releases": [
-    {
-      "repository": "2miners/Ravencoin",
-      "tag": "v4.8.0",
-      "version": "4.8.0",
-      "commit": "b60f50e04f1fba425b28804e61be2694faaf3469",
-      "status": "KNOWN_SAFE",
-      "publishedAt": "2026-08-11T08:16:45Z",
-      "artifactSha256": "966cf8978af1f2e3f36e9733d011eb92f4116750af6f8e77c5a5ced525577c4c",
-      "certification": {
-        "profile": "rvn-consensus-2026-08-v1",
-        "profileRevision": 1,
-        "profileSha256": "1342d079f2eef7ae0803a247d2908c4b031ee4a542b0f837210f92ba36ae27b2",
-        "result": "PASS",
-        "method": "automated-release-certification",
-        "automatedCertification": "CERTIFICATION_PASSED",
-        "reportDigest": "7a7e04b7c38a651896a5126a99fd9e8a8858c771c0cce5366b13e993f8205e7f",
-        "evidence": [
-          "release tag v4.8.0 resolves through annotated tag object 9f553fcbcd6929acf24c0dfea456398dc6455dae to commit b60f50e04f1fba425b28804e61be2694faaf3469, checked against the GitHub API on 2026-08-15; the tag itself is not GPG signed",
-          "published archive ravencoin-4.8.0-x86_64-linux-gnu.tar.gz matches the pinned SHA-256 in both the release metadata and the published SHA256SUMS file, and the maintained server image re-verifies it at build time",
-          "the real mainnet headers at heights 4487774 to 4487777 were collected from a synchronized 4.8.0 node, re-hashed under KAWPOW light verification, and match their known block hashes",
-          "forged variants of the boundary header at 4487776 with a mismatched declared nHeight are rejected by the enforcement rule, and the honest headers are accepted",
-          "the incident checkpoint hash at height 4487775 reported by a synchronized 4.8.0 node matches 000000000002d64509e06e76ddbbe418c725291687ec62b41ecfc40386a091fd",
-          "transfer_overflow is a known consensus deployment on that node and reports active since block 4493664, which an unpatched generation cannot do"
-        ],
-        "limitation": "Live-node deployment validation remains separate: the certified software identity does not attest to a third-party Electrum server's running binary or completed mainnet index."
-      }
-    }
-  ]
+ "schemaVersion": 1,
+ "policyVersion": 3,
+ "generatedAt": "2026-08-21T22:06:45+00:00",
+ "safetyProfile": "rvn-consensus-2026-08-v1",
+ "note": "Built-in baseline compiled into this wallet build. It mirrors the release set of signed safe-Core policy v3, whose signature verifies under the trusted key a6b89849cec9eab7 pinned in core_safety_policy.py. It is used when no signed remote policy has been accepted, and a remote policy may add or restrict entries but may never rehabilitate anything refused here. Identity is repository plus commit; a version string on its own never matches. The expiry carried by the signed policy is deliberately not mirrored: a built-in baseline that expires would leave a wallet with no policy at all.",
+ "releases": [
+  {
+   "commit": "b60f50e04f1fba425b28804e61be2694faaf3469",
+   "publishedAt": "2026-08-11T08:16:45Z",
+   "reportDigest": "7a7e04b7c38a651896a5126a99fd9e8a8858c771c0cce5366b13e993f8205e7f",
+   "repository": "2miners/Ravencoin",
+   "revocationReason": "2miners is not a trust source; superseded by the RavenProject-only Core trust root",
+   "revokedAt": "2026-08-20T00:00:00+00:00",
+   "status": "REVOKED",
+   "tag": "v4.8.0",
+   "version": "4.8.0"
+  },
+  {
+   "certification": {
+    "finishedAt": 1787217509,
+    "harnessVersion": "1.0.0",
+    "profile": "rvn-consensus-2026-08-v1",
+    "profileRevision": 2,
+    "profileSha256": "8606d330e917414d75bfd0225804faa1ca3a3593f6886e0ac5347fc7444ebd40",
+    "result": "PASS"
+   },
+   "commit": "22549129888d02e0e08fcdb9f96f3c699167e774",
+   "publishedAt": "2026-08-19T00:16:44Z",
+   "reportDigest": "949ec5eb66fc5fef709a75073bb5aba8964b1212e4b407369aace0cde3a34045",
+   "repository": "RavenProject/Ravencoin",
+   "status": "KNOWN_SAFE",
+   "tag": "v4.8.0",
+   "version": "4.8.0"
+  }
+ ]
 }
