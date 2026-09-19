@@ -55,3 +55,6 @@ electrum/*.so.*
 electrum/*.dll
 electrum/*.dylib
 contrib/osx/*.dylib
+
+# local source install venv from the documented quick start
+.venv/
