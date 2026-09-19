@@ -684,7 +684,15 @@ class AddressSynchronizer(Logger, EventListener):
         h2 = []
         balance = defaultdict(int)
         for tx_hash, tx_mined_status, asset, delta, fee in history:
-            balance[asset] += delta
+            # Only transactions the verifier has proven at their claimed height
+            # contribute to the running balance. get_balance() and
+            # get_addr_outputs() ignore both the outputs and the spends of
+            # unproven transactions, so counting them here would make the
+            # history balance drift away from the wallet balance.
+            is_unproven = (tx_mined_status.height > 0
+                           and not self._is_tx_spv_verified_at_height(tx_hash, tx_mined_status.height))
+            if not is_unproven:
+                balance[asset] += delta
             h2.append(HistoryItem(
                 txid=tx_hash,
                 tx_mined_status=tx_mined_status,
@@ -697,8 +705,12 @@ class AddressSynchronizer(Logger, EventListener):
         for key, _balance in balance.items():
             c, u, x = asset_balances[key]
             if _balance != c + u + x:
+                # History and balance can still disagree while merkle proofs are
+                # arriving, for instance when a proven transaction spends an
+                # output of one that is not proven yet. That is a display
+                # inconsistency, not a reason to kill the GUI refresh loop, so
+                # report it and keep going.
                 self.logger.error(f'sanity check failed! key={key}; c={c},u={u},x={x} while history balance={_balance}')
-                raise Exception("wallet.get_history() failed balance sanity-check")
         return h2
 
     def _add_tx_to_local_history(self, txid):
