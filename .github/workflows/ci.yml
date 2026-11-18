@@ -72,6 +72,7 @@ jobs:
             electrum/tests/test_coinchooser.py \
             electrum/tests/test_x509.py \
             electrum/tests/test_revealer.py \
+            electrum/tests/test_ledger_legacy.py \
             --deselect electrum/tests/test_util.py::TestUtil::test_parse_URI_lightning_consistency
 
           # Not gated -- inherited upstream debt for features this fork does

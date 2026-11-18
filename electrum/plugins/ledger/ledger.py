@@ -69,6 +69,26 @@ except ImportError as e:
 
     LEDGER_BITCOIN = False
 
+    class SecurityStatusNotSatisfiedError(Exception):
+        pass
+
+    class BTChipException(Exception):
+        def __init__(self, message="", sw=0x6F00):
+            super().__init__(message)
+            self.message = message
+            self.sw = sw
+
+    def compress_public_key(publicKey):
+        if publicKey[0] == 4:
+            if (publicKey[64] & 1) != 0:
+                param = 3
+            else:
+                param = 2
+            result = bytearray([param])
+            result.extend(publicKey[1:33])
+            return result
+        return publicKey
+
 
 MSG_NEEDS_FW_UPDATE_GENERIC = (
     _("Firmware version too old. Please update at") + " https://www.ledger.com"
@@ -159,8 +179,21 @@ def test_pin_unlocked(func):
             return func(self, *args, **kwargs)
         except SecurityStatusNotSatisfiedError:
             raise UserFacingException(_("Your Ledger is locked. Please unlock it."))
+        except BTChipException as e:
+            if e.sw == 0x6982:
+                raise UserFacingException(_("Your Ledger is locked. Please unlock it."))
+            if e.sw in (0x6D00, 0x6E00, 0x6511):
+                raise UserFacingException(
+                    _(
+                        "Make sure the Ravencoin app is open on your Ledger device."
+                    )
+                )
+            raise
 
     return catch_exception
+
+
+test_pin_unlocked.__test__ = False
 
 
 # from HWI
@@ -345,8 +378,9 @@ class Ledger_Client(HardwareClientBase, ABC):
     def __init__(self, *, plugin: HW_PluginBase):
         HardwareClientBase.__init__(self, plugin=plugin)
 
+    @abstractmethod
     def get_master_fingerprint(self) -> bytes:
-        return self.request_root_fingerprint_from_device()
+        pass
 
     @abstractmethod
     def show_address(self, address_path: str, txin_type: str):
@@ -374,6 +408,9 @@ class Ledger_Client_Legacy(Ledger_Client):
     """Client based on the bitchip library, targeting versions 2.0.* and below."""
 
     is_legacy = True
+    BTCHIP_INS_GET_MASTER_FINGERPRINT = 0xD0
+    FALLBACK_STORAGE_ENCRYPTION_DERIVATION_MAINNET = "m/4541509'/175'/0'"
+    FALLBACK_STORAGE_ENCRYPTION_DERIVATION_TESTNET = "m/4541509'/1'/0'"
 
     def __init__(
         self, hidDevice: "HID", *, product_key: Tuple[int, int], plugin: HW_PluginBase
@@ -391,6 +428,47 @@ class Ledger_Client_Legacy(Ledger_Client):
 
         self._product_key = product_key
         self._soft_device_id = None
+
+    def _get_master_fingerprint(self) -> bytes:
+        """Return the 4-byte master (root) key fingerprint.
+
+        Tries the dedicated GET_MASTER_FINGERPRINT APDU first (INS 0xD0),
+        which does NOT require DERIVE_MASTER permission (removed in
+        app-bitcoin-legacy >= 2.4.10). If the device does not support it
+        (older app/firmware), falls back to getWalletPublicKey("") + HASH160.
+        """
+        try:
+            if hasattr(self.dongleObject, "getMasterFingerprint"):
+                return bytes(self.dongleObject.getMasterFingerprint())[0:4]
+            apdu = bytearray(
+                [
+                    self.dongleObject.BTCHIP_CLA,
+                    self.BTCHIP_INS_GET_MASTER_FINGERPRINT,
+                    0x00,
+                    0x00,
+                    0x00,
+                ]
+            )
+            response = self.dongleObject.dongle.exchange(apdu)
+            if len(response) >= 4:
+                return bytes(response[0:4])
+        except BTChipException as e:
+            if e.sw in (0x6D00, 0x6A80, 0x6B00):  # INS not supported / bad data
+                _logger.info(
+                    "getMasterFingerprint APDU not supported (sw=0x%04x), "
+                    "falling back to getWalletPublicKey",
+                    e.sw,
+                )
+            else:
+                raise
+        return self._get_node_fingerprint("")
+
+    def _get_node_fingerprint(self, bip32_path: str) -> bytes:
+        """Return the 4-byte fingerprint for an arbitrary BIP32 node
+        by calling getWalletPublicKey + HASH160.
+        """
+        nodeData = self.dongleObject.getWalletPublicKey(bip32_path)
+        return hash_160(compress_public_key(nodeData["publicKey"]))[0:4]
 
     def is_pairable(self):
         return True
@@ -438,6 +516,48 @@ class Ledger_Client_Legacy(Ledger_Client):
         return LedgerPlugin.device_name_from_product_key(self._product_key)
 
     @runs_in_hwd_thread
+    def request_root_fingerprint_from_device(self) -> str:
+        return self._get_master_fingerprint().hex()
+
+    @runs_in_hwd_thread
+    @test_pin_unlocked
+    def get_master_fingerprint(self) -> bytes:
+        return self._get_master_fingerprint()
+
+    @classmethod
+    def _get_fallback_storage_encryption_derivation(cls) -> str:
+        coin_type = getattr(constants.net, "BIP44_COIN_TYPE", 175)
+        if coin_type == 1:
+            return cls.FALLBACK_STORAGE_ENCRYPTION_DERIVATION_TESTNET
+        return f"m/4541509'/{coin_type}'/0'"
+
+    @runs_in_hwd_thread
+    def get_password_for_storage_encryption(self) -> str:
+        from electrum.keystore import Xpub
+        from electrum.storage import get_derivation_used_for_hw_device_encryption
+
+        derivation = get_derivation_used_for_hw_device_encryption()
+        try:
+            xpub = self.get_xpub(derivation, "standard")
+        except BTChipException as e:
+            # Ledger Ravencoin app >= 2.4.10 enforces PATH_APP_LOAD_PARAMS = "*/175'"
+            # and rejects the standard Electrum encryption path m/4541509'/1112098098'
+            # with SW 0x6985 / 0x6a82 / 0x6a80 / 0x6b00.
+            if e.sw in (0x6985, 0x6A80, 0x6A82, 0x6B00):
+                fallback_derivation = self._get_fallback_storage_encryption_derivation()
+                _logger.info(
+                    "Ledger rejected standard storage encryption derivation %s (sw=0x%04x); "
+                    "falling back to coin-type-scoped derivation %s",
+                    derivation,
+                    e.sw,
+                    fallback_derivation,
+                )
+                xpub = self.get_xpub(fallback_derivation, "standard")
+            else:
+                raise
+        return Xpub.get_pubkey_from_xpub(xpub, ()).hex()
+
+    @runs_in_hwd_thread
     def has_usable_connection_with_device(self):
         try:
             self.dongleObject.getFirmwareVersion()
@@ -464,9 +584,10 @@ class Ledger_Client_Legacy(Ledger_Client):
         bip32_path = bip32_path[2:]  # cut off "m/"
         if len(bip32_intpath) >= 1:
             prevPath = bip32.convert_bip32_intpath_to_strpath(bip32_intpath[:-1])[2:]
-            nodeData = self.dongleObject.getWalletPublicKey(prevPath)
-            publicKey = compress_public_key(nodeData["publicKey"])
-            fingerprint_bytes = hash_160(publicKey)[0:4]
+            if len(prevPath) == 0:
+                fingerprint_bytes = self._get_master_fingerprint()
+            else:
+                fingerprint_bytes = self._get_node_fingerprint(prevPath)
             childnum_bytes = bip32_intpath[-1].to_bytes(length=4, byteorder="big")
         else:
             fingerprint_bytes = bytes(4)
@@ -1548,9 +1669,9 @@ class LedgerPlugin(HW_PluginBase):
         (0x2C97, 0x0005),  # Nano-S Plus
         (0x2C97, 0x5011),  # Nano-S Plus app-bitcoin >= 1.5.1
         (0x2C97, 0x5015),  # Nano-S Plus app-bitcoin >= 1.5.1
-        (0x2C97, 0x0006),  # RFU
-        (0x2C97, 0x0007),  # RFU
-        (0x2C97, 0x0008),  # RFU
+        (0x2C97, 0x0006),  # Stax
+        (0x2C97, 0x0007),  # Flex
+        (0x2C97, 0x0008),  # Nano Gen5
         (0x2C97, 0x0009),  # RFU
         (0x2C97, 0x000A),
     ]  # RFU
@@ -1561,6 +1682,7 @@ class LedgerPlugin(HW_PluginBase):
         0x50: "Ledger Nano S Plus",
         0x60: "Ledger Stax",
         0x70: "Ledger Flex",
+        0x80: "Ledger Nano Gen5",
     }
 
     SUPPORTED_XTYPES = ("standard",)  #'p2wpkh-p2sh', 'p2wpkh', 'p2wsh-p2sh', 'p2wsh')
@@ -1611,7 +1733,10 @@ class LedgerPlugin(HW_PluginBase):
                 return True, "Ledger Nano S Plus"
             if product_key == (0x2C97, 0x0006):
                 return True, "Ledger Stax"
-            return True, None
+            if product_key == (0x2C97, 0x0007):
+                return True, "Ledger Flex"
+            if product_key == (0x2C97, 0x0008):
+                return True, "Ledger Nano Gen5"
         # modern product_keys
         if product_key[0] == 0x2C97:
             product_id = product_key[1]
@@ -1619,6 +1744,8 @@ class LedgerPlugin(HW_PluginBase):
             if model_id in cls.LEDGER_MODEL_IDS:
                 model_name = cls.LEDGER_MODEL_IDS[model_id]
                 return True, model_name
+        if product_key in cls.DEVICE_IDS:
+            return True, None
         # give up
         return False, None
 

@@ -311,9 +311,9 @@ class TestDynamicServerList(unittest.TestCase):
             document = json.load(handle)
         body = verify_signed_registry(
             document,
-            now=datetime.datetime(2026, 8, 20, tzinfo=datetime.timezone.utc),
+            now=datetime.datetime(2026, 9, 20, tzinfo=datetime.timezone.utc),
         )
-        self.assertEqual(2, body["registryVersion"])
+        self.assertEqual(3, body["registryVersion"])
         self.assertEqual(
             "ALENOC",
             body["servers"]["electrumx.raventag.com"]["operatorGroup"],
