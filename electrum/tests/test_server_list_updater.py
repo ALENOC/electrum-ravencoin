@@ -311,12 +311,16 @@ class TestDynamicServerList(unittest.TestCase):
             document = json.load(handle)
         body = verify_signed_registry(
             document,
-            now=datetime.datetime(2026, 9, 20, tzinfo=datetime.timezone.utc),
+            now=datetime.datetime(2026, 11, 19, tzinfo=datetime.timezone.utc),
         )
-        self.assertEqual(3, body["registryVersion"])
+        self.assertEqual(4, body["registryVersion"])
         self.assertEqual(
             "ALENOC",
             body["servers"]["electrumx.raventag.com"]["operatorGroup"],
+        )
+        self.assertEqual(
+            "ALENOC",
+            body["servers"]["rpi-5.tail826401.ts.net"]["operatorGroup"],
         )
 
     def test_malformed_remote_entries_fail_closed(self):

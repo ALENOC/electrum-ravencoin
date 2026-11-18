@@ -13,6 +13,13 @@
     "s": "50002",
     "version": "1.11"
   },
+  "rpi-5.tail826401.ts.net": {
+    "backend_policy": "operator-controlled anchor via Tailscale Funnel TLS; Ravencoin Core >=4.8.0 and ElectrumX-RVN >=1.13.0; newer Core releases require signed safety-policy certification; live capability required",
+    "operatorGroup": "ALENOC",
+    "pruning": "-",
+    "s": "8443",
+    "version": "1.11"
+  },
   "electrum1.cipig.net": {
     "backend_policy": "discovery-only; operator-confirmed Ravencoin Core 4.8.0; hardened server.ravencoin_backend capability pending; live capability required",
     "pruning": "-",
