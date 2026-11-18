@@ -136,6 +136,10 @@ class TestLedgerLegacyHardenedApp(ElectrumTestCase):
 
         pw = client.get_password_for_storage_encryption()
         self.assertEqual(pw, dongle.node_pub_compressed.hex())
+        self.assertEqual(
+            client.get_fallback_password_for_storage_encryption(),
+            dongle.node_pub_compressed.hex(),
+        )
         norm_paths = [p.replace("h", "'") for p in dongle.requested_paths]
         # First attempt at 4541509' fails under "*/175'", then falls back to 4541509'/175'/0'
         self.assertIn("4541509'", norm_paths)
