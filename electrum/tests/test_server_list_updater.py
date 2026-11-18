@@ -95,11 +95,7 @@ class TestDynamicServerList(unittest.TestCase):
         self.assertEqual("ALENOC", anchors["electrumx.raventag.com"]["operatorGroup"])
 
         compiled = get_compiled_server_list()
-        self.assertIn("rvn4lyfe.com", compiled)
-        self.assertNotIn("operatorGroup", compiled["rvn4lyfe.com"])
-        onion = "aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion"
-        self.assertIn(onion, compiled)
-        self.assertNotIn("operatorGroup", compiled[onion])
+        self.assertEqual(set(compiled.keys()), {"electrumx.raventag.com"})
 
     def test_remote_host_cannot_mint_operator_group(self):
         remote = {
@@ -136,9 +132,6 @@ class TestDynamicServerList(unittest.TestCase):
         self.assertEqual(anchor, omitted["electrumx.raventag.com"])
 
     def test_non_anchor_compiled_seed_is_updateable_and_removable(self):
-        compiled = get_compiled_server_list()
-        self.assertEqual("50002", compiled["rvn4lyfe.com"]["s"])
-
         updated = build_effective_server_list(
             {"rvn4lyfe.com": {"s": "50003", "version": "1.12"}}
         )
@@ -313,14 +306,11 @@ class TestDynamicServerList(unittest.TestCase):
             document,
             now=datetime.datetime(2026, 11, 19, tzinfo=datetime.timezone.utc),
         )
-        self.assertEqual(4, body["registryVersion"])
+        self.assertEqual(5, body["registryVersion"])
+        self.assertEqual(list(body["servers"].keys()), ["electrumx.raventag.com"])
         self.assertEqual(
             "ALENOC",
             body["servers"]["electrumx.raventag.com"]["operatorGroup"],
-        )
-        self.assertEqual(
-            "ALENOC",
-            body["servers"]["rpi-5.tail826401.ts.net"]["operatorGroup"],
         )
 
     def test_malformed_remote_entries_fail_closed(self):

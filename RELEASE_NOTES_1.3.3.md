@@ -34,10 +34,14 @@ with the updated official Ledger Ravencoin application (`2.4.10` through
   Stax, Ledger Flex, and Ledger Nano Gen5, and improved user-facing messages
   when the Ledger device is locked or the Ravencoin app is not open.
 
-## Server discovery
+## Server discovery and transport
 
-- Included signed server registry v3 (`electrum/servers.signed.json`) with
-  additional discovery endpoints.
+- `electrum/servers.json` and signed server registry v5
+  (`electrum/servers.signed.json`) now retain only the authenticated
+  `electrumx.raventag.com` endpoint.
+- Added transparent WebSocket-over-TLS (`wss://<host>:443`) transport fallback
+  in `Interface` (`_RSClient` / `_AiohttpWSTransport`) when direct TCP port
+  `50002` is proxied behind Cloudflare Tunnel.
 
 ## Distribution
 

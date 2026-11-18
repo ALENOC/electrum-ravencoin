@@ -39,13 +39,15 @@ import functools
 
 import aiorpcx
 from aiorpcx import RPCSession, Notification, NetAddress, NewlineFramer
-from aiorpcx.curio import timeout_after, TaskTimeout
+from aiorpcx.curio import Event, timeout_after, TaskTimeout
 from aiorpcx.jsonrpc import JSONRPC, CodeMessageError
-from aiorpcx.rawsocket import RSClient
+from aiorpcx.rawsocket import RSClient, ConnectionLostError
+from aiorpcx.session import SessionBase, SessionKind
+import aiohttp
 import certifi
 
 from .asset import get_error_for_asset_name
-from .util import (ignore_exceptions, log_exceptions, bfh, MySocksProxy,
+from .util import (ignore_exceptions, log_exceptions, bfh, MySocksProxy, make_aiohttp_session,
                    is_integer, is_non_negative_integer, is_hash256_str, is_hex_str,
                    is_int_or_float, is_non_negative_int_or_float, OldTaskGroup)
 from . import util
@@ -281,11 +283,106 @@ class InvalidOptionCombination(Exception): pass
 class ConnectError(NetworkException): pass
 
 
+class _AiohttpWSTransport:
+    """WebSocket transport backed by aiohttp for Cloudflare Tunnel / WSS ElectrumX endpoints."""
+
+    def __init__(self, ws, aiohttp_session, session_factory, host, port, proxy):
+        self.ws = ws
+        self.aiohttp_session = aiohttp_session
+        self.kind = SessionKind.CLIENT
+        self._proxy = proxy
+        self._remote_address = NetAddress(host, port)
+        self._closed_event = Event()
+        self.loop = asyncio.get_event_loop()
+        self.session = session_factory(self)
+        self._process_messages_task = self.loop.create_task(self.process_messages())
+
+    async def recv_message(self):
+        msg = await self.ws.receive()
+        if msg.type == aiohttp.WSMsgType.TEXT:
+            data = msg.data.encode("utf-8")
+            self.session.data_received(data)
+            return data
+        elif msg.type == aiohttp.WSMsgType.BINARY:
+            data = bytes(msg.data)
+            self.session.data_received(data)
+            return data
+        else:
+            raise ConnectionLostError()
+
+    async def process_messages(self):
+        try:
+            await self.session.process_messages(self.recv_message)
+        except (ConnectionLostError, Exception):
+            pass
+        finally:
+            self._closed_event.set()
+
+    async def write(self, framed_message):
+        if not self.is_closing():
+            text = (
+                framed_message.decode("utf-8")
+                if isinstance(framed_message, (bytes, bytearray))
+                else str(framed_message)
+            )
+            await self.ws.send_str(text)
+
+    async def close(self, force_after=1):
+        try:
+            if not self.ws.closed:
+                await self.ws.close()
+        finally:
+            if not self.aiohttp_session.closed:
+                await self.aiohttp_session.close()
+            self._closed_event.set()
+
+    async def abort(self):
+        await self.close()
+
+    def is_closing(self):
+        return self._closed_event.is_set() or self.ws.closed
+
+    def proxy(self):
+        return self._proxy
+
+    def remote_address(self):
+        return self._remote_address
+
+
 class _RSClient(RSClient):
+    def __init__(self, *args, proxy_dict=None, max_msg_size=10_000_000, **kwargs):
+        self._session_factory = kwargs.get('session_factory', RPCSession)
+        self._proxy_dict = proxy_dict
+        self._max_msg_size = max_msg_size
+        self._ws_transport = None
+        super().__init__(*args, **kwargs)
+
     async def create_connection(self):
         try:
+            if self.kwargs.get('ssl') and not self.proxy:
+                return await util.wait_for2(super().create_connection(), 4)
             return await super().create_connection()
-        except OSError as e:
+        except (OSError, asyncio.TimeoutError, TaskTimeout) as e:
+            sslc = self.kwargs.get('ssl')
+            if sslc and isinstance(sslc, ssl.SSLContext) and sslc.verify_mode != ssl.CERT_NONE:
+                aio_sess = make_aiohttp_session(proxy=self._proxy_dict, timeout=15)
+                try:
+                    await aio_sess.__aenter__()
+                    ws = await aio_sess.ws_connect(
+                        f"wss://{self.host}:443",
+                        ssl=sslc,
+                        max_msg_size=self._max_msg_size,
+                        autoping=True,
+                        heartbeat=30,
+                    )
+                    self._ws_transport = _AiohttpWSTransport(
+                        ws, aio_sess, self._session_factory, self.host, 443, self.proxy
+                    )
+                    return None, self._ws_transport
+                except Exception:
+                    await aio_sess.close()
+            if isinstance(e, (asyncio.TimeoutError, TaskTimeout)):
+                e = socket.timeout("timed out")
             # note: using "from e" here will set __cause__ of ConnectError
             raise ConnectError(e) from e
 
@@ -428,6 +525,7 @@ class Interface(Logger):
         if util.is_localhost(server.host):
             self.logger.info(f"looks like localhost: not using proxy for this server")
             proxy = None
+        self._proxy_dict = proxy
         self.proxy = MySocksProxy.from_proxy_dict(proxy)
 
         # Latest block header and corresponding height, as claimed by the server.
@@ -742,9 +840,12 @@ class Interface(Logger):
 
     async def open_session(self, sslc, exit_early=False):
         session_factory = lambda *args, iface=self, **kwargs: NotificationSession(*args, **kwargs, interface=iface)
+        max_msg_size = max(10_000_000, self.network.config.NETWORK_MAX_INCOMING_MSG_SIZE)
         async with _RSClient(session_factory=session_factory,
                              host=self.host, port=self.port,
-                             ssl=sslc, proxy=self.proxy) as session:
+                             ssl=sslc, proxy=self.proxy,
+                             proxy_dict=self._proxy_dict,
+                             max_msg_size=max_msg_size) as session:
             self.session = session  # type: NotificationSession
             self.session.set_default_timeout(self.network.get_network_timeout_seconds(NetworkTimeout.Generic))
             try:
