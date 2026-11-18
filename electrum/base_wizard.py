@@ -387,10 +387,20 @@ class BaseWizard(Logger):
             try:
                 storage.decrypt(password)
             except InvalidPassword:
-                # try to clear session so that user can type another passphrase
-                if hasattr(client, 'clear_session'):  # FIXME not all hw wallet plugins have this
-                    client.clear_session()
-                raise
+                decrypted = False
+                if hasattr(client, 'get_fallback_password_for_storage_encryption'):
+                    try:
+                        fallback_pw = client.get_fallback_password_for_storage_encryption()
+                        if fallback_pw != password:
+                            storage.decrypt(fallback_pw)
+                            decrypted = True
+                    except InvalidPassword:
+                        pass
+                if not decrypted:
+                    # try to clear session so that user can type another passphrase
+                    if hasattr(client, 'clear_session'):  # FIXME not all hw wallet plugins have this
+                        client.clear_session()
+                    raise
         else:
             raise Exception('unknown purpose: %s' % purpose)
 

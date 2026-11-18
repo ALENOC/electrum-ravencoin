@@ -532,6 +532,14 @@ class Ledger_Client_Legacy(Ledger_Client):
         return f"m/4541509'/{coin_type}'/0'"
 
     @runs_in_hwd_thread
+    def get_fallback_password_for_storage_encryption(self) -> str:
+        from electrum.keystore import Xpub
+
+        fallback_derivation = self._get_fallback_storage_encryption_derivation()
+        xpub = self.get_xpub(fallback_derivation, "standard")
+        return Xpub.get_pubkey_from_xpub(xpub, ()).hex()
+
+    @runs_in_hwd_thread
     def get_password_for_storage_encryption(self) -> str:
         from electrum.keystore import Xpub
         from electrum.storage import get_derivation_used_for_hw_device_encryption
@@ -552,7 +560,7 @@ class Ledger_Client_Legacy(Ledger_Client):
                     e.sw,
                     fallback_derivation,
                 )
-                xpub = self.get_xpub(fallback_derivation, "standard")
+                return self.get_fallback_password_for_storage_encryption()
             else:
                 raise
         return Xpub.get_pubkey_from_xpub(xpub, ()).hex()
