@@ -239,7 +239,10 @@ class TestProductionOperatorAnchors(unittest.TestCase):
             "ALENOC",
             constants.net.DEFAULT_SERVERS["electrumx.raventag.com"]["operatorGroup"],
         )
-        self.assertNotIn("operatorGroup", constants.net.DEFAULT_SERVERS["rvn4lyfe.com"])
+        self.assertEqual(
+            set(constants.net.DEFAULT_SERVERS.keys()),
+            {"electrumx.raventag.com"},
+        )
 
 
 if __name__ == "__main__":
