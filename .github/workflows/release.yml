@@ -116,6 +116,15 @@ jobs:
           ./contrib/build-linux/appimage/build.sh
           compgen -G "dist/*.AppImage" >/dev/null
 
+      - name: Start packaged Linux client
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=(dist/*.AppImage)
+          test "${#image[@]}" -eq 1
+          file "${image[0]}" | grep -F x86-64
+          xvfb-run -a bash contrib/test-packaged-gui.sh "${image[0]}" --appimage-extract-and-run
+
       - name: Upload Linux artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -178,6 +187,19 @@ jobs:
             ls -l dist/*.dmg
             exit 1
           fi
+
+      - name: Mount DMG and start packaged Intel client
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg=(dist/*.dmg)
+          test "${#dmg[@]}" -eq 1
+          mountpoint=$(mktemp -d)
+          hdiutil attach -readonly -nobrowse -mountpoint "$mountpoint" "${dmg[0]}"
+          trap 'hdiutil detach "$mountpoint"' EXIT
+          executable="$mountpoint/Electrum-Ravencoin.app/Contents/MacOS/run_electrum"
+          lipo -verify_arch x86_64 "$executable"
+          bash contrib/test-packaged-gui.sh "$executable"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -261,7 +283,11 @@ jobs:
           NOTES_FILE="RELEASE_NOTES_${VERSION}.md"
           test -f "$NOTES_FILE"
 
-          gh release create "$VERSION" \
+          flags=()
+          if [[ "$VERSION" =~ rc[0-9]+$ ]]; then
+            flags+=(--prerelease --latest=false)
+          fi
+          gh release create "$VERSION" "${flags[@]}" \
             --verify-tag \
             --draft \
             --title "Electrum-Ravencoin $VERSION" \
