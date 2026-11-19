@@ -198,7 +198,7 @@ jobs:
           hdiutil attach -readonly -nobrowse -mountpoint "$mountpoint" "${dmg[0]}"
           trap 'hdiutil detach "$mountpoint"' EXIT
           executable="$mountpoint/Electrum-Ravencoin.app/Contents/MacOS/run_electrum"
-          lipo -verify_arch x86_64 "$executable"
+          lipo "$executable" -verify_arch x86_64
           bash contrib/test-packaged-gui.sh "$executable"
 
       - name: Upload macOS artifact
