@@ -196,7 +196,8 @@ jobs:
           test "${#dmg[@]}" -eq 1
           mountpoint=$(mktemp -d)
           hdiutil attach -readonly -nobrowse -mountpoint "$mountpoint" "${dmg[0]}"
-          trap 'hdiutil detach "$mountpoint"' EXIT
+          # The runner may still be indexing the read-only image after GUI exit.
+          trap 'hdiutil detach "$mountpoint" || hdiutil detach "$mountpoint" -force' EXIT
           executable="$mountpoint/Electrum-Ravencoin.app/Contents/MacOS/run_electrum"
           lipo "$executable" -verify_arch x86_64
           bash contrib/test-packaged-gui.sh "$executable"
