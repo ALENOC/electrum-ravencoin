@@ -216,6 +216,14 @@ class TestLedgerLegacyHardenedApp(ElectrumTestCase):
             "Ledger root public key failed (sw=0x6985)",
         ])
 
+    def test_root_fallback_rejects_invalid_curve_point(self):
+        dongle = _DummyHardenedLedgerDongle(support_get_master_fp=False)
+        dongle.master_pub_uncompressed = b"\x04" + bytes(64)
+        client = _make_legacy_client(dongle)
+        with self.assertRaises(ecc.InvalidECPointException):
+            client.get_soft_device_id()
+        self.assertIsNone(client._soft_device_id)
+
     def test_pairing_requires_original_account_xpub(self):
         client = _make_legacy_client(_DummyHardenedLedgerDongle())
         km = MagicMock()
@@ -277,6 +285,29 @@ class TestLedgerLegacyHardenedApp(ElectrumTestCase):
             blocked.add("4541509'/175'/0'")
             with self.assertRaises(BTChipException):
                 client.get_password_for_storage_decryption()
+
+    def test_storage_statuses_preserve_legacy_selection(self):
+        for sw in (0x6D00, 0x6A80, 0x6B00, 0x6985):
+            with self.subTest(sw=sw):
+                dongle = _DummyHardenedLedgerDongle(support_get_master_fp=False)
+                read_key = dongle.getWalletPublicKey
+                client = _make_legacy_client(dongle)
+
+                def read(path):
+                    if path == "4541509'":
+                        raise BTChipException("device detail", sw)
+                    return read_key(path)
+
+                with patch.object(dongle, "getWalletPublicKey", side_effect=read):
+                    if sw == 0x6D00:
+                        with self.assertRaises(UserFacingException):
+                            client.get_password_for_storage_decryption()
+                        self.assertEqual(dongle.requested_paths, [])
+                    else:
+                        self.assertEqual(client.get_password_for_storage_encryption(),
+                                         dongle.node_pub_compressed.hex())
+                        self.assertEqual(dongle.requested_paths,
+                                         ["4541509'/175'", "4541509'/175'/0'"])
 
     def test_firmware_and_account_errors_do_not_switch_derivation(self):
         dongle = _DummyHardenedLedgerDongle()

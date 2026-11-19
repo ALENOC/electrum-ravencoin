@@ -463,7 +463,8 @@ class Ledger_Client_Legacy(Ledger_Client):
         operation = "xpub parent public key" if bip32_path else "root public key"
         with self._log_apdu(operation):
             node_data = self.dongleObject.getWalletPublicKey(bip32_path)
-        return hash_160(compress_public_key(node_data["publicKey"]))[:4]
+        public_key = ecc.ECPubkey(bytes(node_data["publicKey"]))
+        return hash_160(public_key.get_public_key_bytes(compressed=True))[:4]
 
     def is_pairable(self):
         return True
@@ -526,13 +527,13 @@ class Ledger_Client_Legacy(Ledger_Client):
             return cls.FALLBACK_STORAGE_ENCRYPTION_DERIVATION_TESTNET
         return f"m/4541509'/{coin_type}'/0'"
 
-    def _read_storage_key(self, derivation):
+    def _read_storage_key(self, derivation, *, operation):
         # Keep the 1.3.3 parent probe: its policy rejection can select the
         # coin-scoped storage key on devices that permit both leaf reads.
         path = bip32.normalize_bip32_derivation(derivation, hardened_char="'")[2:]
         parent = path.rsplit("/", 1)[0]
         try:
-            with self._log_apdu("storage parent public key"):
+            with self._log_apdu(f"{operation} parent public key"):
                 parent_data = self.dongleObject.getWalletPublicKey(parent)
                 ecc.ECPubkey(bytes(parent_data["publicKey"]))
         except BTChipException as e:
@@ -540,7 +541,7 @@ class Ledger_Client_Legacy(Ledger_Client):
                 raise
             # A storage password uses only the leaf's public key. Try that
             # exact leaf without constructing an xpub with a guessed parent.
-        with self._log_apdu("storage public key"):
+        with self._log_apdu(f"{operation} public key"):
             node = self.dongleObject.getWalletPublicKey(path)
         return ecc.ECPubkey(bytes(node["publicKey"])).get_public_key_bytes().hex()
 
@@ -548,7 +549,9 @@ class Ledger_Client_Legacy(Ledger_Client):
     @test_pin_unlocked
     def get_fallback_password_for_storage_encryption(self) -> str:
         self.checkDevice()
-        return self._read_storage_key(self._get_fallback_storage_encryption_derivation())
+        return self._read_storage_key(
+            self._get_fallback_storage_encryption_derivation(), operation="coin-scoped storage"
+        )
 
     @runs_in_hwd_thread
     @test_pin_unlocked
@@ -557,7 +560,9 @@ class Ledger_Client_Legacy(Ledger_Client):
 
         self.checkDevice()
         try:
-            return self._read_storage_key(get_derivation_used_for_hw_device_encryption())
+            return self._read_storage_key(
+                get_derivation_used_for_hw_device_encryption(), operation="standard storage"
+            )
         except BTChipException as e:
             # Only existing files can authenticate the alternate 1.3.3 key.
             if e.sw not in (0x6985, 0x6A80, 0x6A82, 0x6B00) and not (
