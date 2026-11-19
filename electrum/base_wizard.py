@@ -383,7 +383,7 @@ class BaseWizard(Logger):
                 self.run('on_hw_derivation', name, device_info, derivation, script_type)
             self.derivation_and_script_type_dialog(f)
         elif purpose == HWD_SETUP_DECRYPT_WALLET:
-            password = client.get_password_for_storage_encryption()
+            password = client.get_password_for_storage_decryption()
             try:
                 storage.decrypt(password)
             except InvalidPassword:

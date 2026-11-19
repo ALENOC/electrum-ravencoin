@@ -1,14 +1,19 @@
-from unittest.mock import MagicMock
+import os
+from unittest.mock import MagicMock, patch
 
 from electrum import bip32, ecc
+from electrum.base_wizard import BaseWizard, HWD_SETUP_DECRYPT_WALLET
 from electrum.crypto import hash_160
+from electrum.keystore import Xpub
+from electrum.plugin import DeviceMgr, DeviceUnpairableError
+from electrum.storage import WalletStorage, StorageEncryptionVersion, get_derivation_used_for_hw_device_encryption
 from electrum.plugins.ledger.ledger import (
     BTChipException,
     Ledger_Client_Legacy,
     LedgerPlugin,
     test_pin_unlocked,
 )
-from electrum.util import UserFacingException
+from electrum.util import InvalidPassword, UserFacingException
 
 from . import ElectrumTestCase
 
@@ -38,6 +43,9 @@ class _DummyHardenedLedgerDongle:
         self.node_pub_compressed, self.node_pub_uncompressed = (
             _compressed_pubkey_and_uncompressed_bytes(3)
         )
+        self.standard_storage_key, self.standard_storage_raw = (
+            _compressed_pubkey_and_uncompressed_bytes(4)
+        )
         self.master_fp = hash_160(self.master_pub_compressed)[0:4]
         self.requested_paths = []
         self.exchanged_apdus = []
@@ -66,6 +74,8 @@ class _DummyHardenedLedgerDongle:
             parts = [p for p in norm_path.split("/") if p]
             if len(parts) < 2 or parts[1] != "175'":
                 raise BTChipException("Conditions of use not satisfied", sw=0x6985)
+        if norm_path == "4541509'/1112098098'":
+            return {"publicKey": self.standard_storage_raw, "chainCode": bytes(32)}
         if norm_path == "":
             return {
                 "publicKey": self.master_pub_uncompressed,
@@ -164,6 +174,122 @@ class TestLedgerLegacyHardenedApp(ElectrumTestCase):
         with self.assertRaises(UserFacingException) as ctx_app:
             dummy.cla_not_supported_call()
         self.assertIn("ravencoin app", str(ctx_app.exception).lower())
+
+    def test_fingerprint_status_and_malformed_response(self):
+        for sw in (0x6F00, 0x6D00, 0x6A80, 0x6B00, 0x6985):
+            with self.subTest(sw=sw):
+                dongle = _DummyHardenedLedgerDongle(support_get_master_fp=False)
+                dongle.dongle.exchange.side_effect = BTChipException("device detail", sw)
+                client = _make_legacy_client(dongle)
+                if sw == 0x6985:
+                    with self.assertRaises(BTChipException):
+                        client.get_soft_device_id()
+                    self.assertEqual(dongle.requested_paths, [])
+                else:
+                    self.assertEqual(client.get_soft_device_id(), dongle.master_fp.hex())
+                    self.assertEqual(client.get_soft_device_id(), dongle.master_fp.hex())
+                    self.assertEqual(dongle.requested_paths, [""])
+        for response in (b"", b"123", b"12345"):
+            for library_method in (False, True):
+                dongle = _DummyHardenedLedgerDongle()
+                if library_method:
+                    dongle.getMasterFingerprint = MagicMock(return_value=response)
+                else:
+                    dongle.dongle.exchange.side_effect = None
+                    dongle.dongle.exchange.return_value = response
+                with self.assertRaises(UserFacingException):
+                    _make_legacy_client(dongle).get_master_fingerprint()
+                self.assertEqual(dongle.requested_paths, [])
+
+    def test_root_fallback_failure_preserves_error_and_logs_only_operation_and_sw(self):
+        dongle = _DummyHardenedLedgerDongle()
+        dongle.dongle.exchange.side_effect = BTChipException("sensitive detail", 0x6F00)
+        client = _make_legacy_client(dongle)
+        with self.assertLogs("electrum.plugins.ledger.ledger", "INFO") as logs:
+            with self.assertRaises(BTChipException) as failure:
+                client.get_soft_device_id()
+        self.assertEqual(failure.exception.sw, 0x6985)
+        self.assertIsNone(client._soft_device_id)
+        self.assertEqual(dongle.requested_paths, [""])
+        self.assertEqual([r.getMessage() for r in logs.records], [
+            "Ledger GET_MASTER_FINGERPRINT failed (sw=0x6f00)",
+            "Ledger root public key failed (sw=0x6985)",
+        ])
+
+    def test_pairing_requires_original_account_xpub(self):
+        client = _make_legacy_client(_DummyHardenedLedgerDongle())
+        km = MagicMock()
+        path = "m/44'/175'/0'"
+        km.get_derivation_prefix.return_value = path
+        km.xpub = client.get_xpub(path, "standard")
+        dm = MagicMock()
+        dm._client_by_id.return_value = client
+        args = dict(plugin=client.plugin, handler=MagicMock(), info=MagicMock(), keystore=km)
+        self.assertIs(DeviceMgr.force_pair_keystore(dm, **args), client)
+        km.xpub = client.get_xpub("m/44'/175'/1'", "standard")
+        with self.assertRaises(DeviceUnpairableError):
+            DeviceMgr.force_pair_keystore(dm, **args)
+
+    def test_storage_6f00_is_scoped_to_operation_and_existing_wallet(self):
+        dongle = _DummyHardenedLedgerDongle(support_get_master_fp=False)
+        read_key = dongle.getWalletPublicKey
+        client = _make_legacy_client(dongle)
+        standard = get_derivation_used_for_hw_device_encryption()
+        scoped = client._get_fallback_storage_encryption_derivation()
+        # Use the original xpub algorithm to make two distinct BIE2 fixtures.
+        keys = [Xpub.get_pubkey_from_xpub(client.get_xpub(path, "standard"), ()).hex()
+                for path in (standard, scoped)]
+        self.assertNotEqual(*keys)
+        blocked = {"4541509'"}
+
+        def read(path):
+            if path.replace("h", "'") in blocked:
+                raise BTChipException("sensitive detail", 0x6F00)
+            return read_key(path)
+
+        with patch.object(dongle, "getWalletPublicKey", side_effect=read):
+            self.assertEqual(client.get_password_for_storage_encryption(), keys[0])
+            for i, key in enumerate(keys):
+                file_path = os.path.join(self.electrum_path, str(i))
+                storage = WalletStorage(file_path)
+                storage.set_password(key, StorageEncryptionVersion.XPUB_PASSWORD)
+                storage.write("original contents")
+                raw = storage.raw
+                if i:
+                    blocked.add("4541509'/1112098098'")
+                    with self.assertRaises(BTChipException):
+                        client.get_password_for_storage_encryption()
+                storage = WalletStorage(file_path)
+                wizard = MagicMock()
+                plugin = MagicMock(spec=LedgerPlugin)
+                plugin.setup_device.return_value = client
+                wizard.plugins.get_plugin.return_value = plugin
+                BaseWizard.on_device(wizard, "ledger", MagicMock(),
+                                     purpose=HWD_SETUP_DECRYPT_WALLET, storage=storage)
+                self.assertEqual(storage.read(), "original contents")
+                self.assertEqual(WalletStorage(file_path).raw, raw)
+            # An inaccessible old standard key cannot be replaced by the scoped key.
+            storage = WalletStorage(os.path.join(self.electrum_path, "0"))
+            with self.assertRaises(InvalidPassword):
+                BaseWizard.on_device(wizard, "ledger", MagicMock(),
+                                     purpose=HWD_SETUP_DECRYPT_WALLET, storage=storage)
+            self.assertFalse(storage.is_past_initial_decryption())
+            blocked.add("4541509'/175'/0'")
+            with self.assertRaises(BTChipException):
+                client.get_password_for_storage_decryption()
+
+    def test_firmware_and_account_errors_do_not_switch_derivation(self):
+        dongle = _DummyHardenedLedgerDongle()
+        client = _make_legacy_client(dongle)
+        with patch.object(dongle, "getFirmwareVersion", side_effect=BTChipException("detail", 0x6F00)):
+            with self.assertRaises(BTChipException):
+                client.get_password_for_storage_decryption()
+            self.assertEqual(dongle.requested_paths, [])
+        for sw in (0x6F00, 0x6D00, 0x6A80, 0x6B00, 0x6985):
+            with patch.object(dongle, "getWalletPublicKey", side_effect=BTChipException("detail", sw)) as read:
+                with self.assertRaises((BTChipException, UserFacingException)):
+                    client.get_xpub("m/44'/175'/0'", "standard")
+                self.assertEqual(read.call_count, 1)
 
     def test_recognize_modern_ledger_models(self):
         self.assertEqual(

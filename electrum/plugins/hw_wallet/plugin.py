@@ -265,6 +265,9 @@ class HardwareClientBase:
         root_fingerprint = BIP32Node.from_xkey(child_of_root_xpub).fingerprint.hex().lower()
         return root_fingerprint
 
+    def get_password_for_storage_decryption(self) -> str:
+        return self.get_password_for_storage_encryption()
+
     @runs_in_hwd_thread
     def get_password_for_storage_encryption(self) -> str:
         # note: using a different password based on hw device type is highly undesirable! see #5993

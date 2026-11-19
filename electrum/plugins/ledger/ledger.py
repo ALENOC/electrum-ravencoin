@@ -2,6 +2,7 @@
 # https://github.com/bitcoin-core/HWI/blob/e731395bde13362950e9f13e01689c475545e4dc/hwilib/devices/ledger.py
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 import base64
 import hashlib
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -429,46 +430,40 @@ class Ledger_Client_Legacy(Ledger_Client):
         self._product_key = product_key
         self._soft_device_id = None
 
-    def _get_master_fingerprint(self) -> bytes:
-        """Return the 4-byte master (root) key fingerprint.
-
-        Tries the dedicated GET_MASTER_FINGERPRINT APDU first (INS 0xD0),
-        which does NOT require DERIVE_MASTER permission (removed in
-        app-bitcoin-legacy >= 2.4.10). If the device does not support it
-        (older app/firmware), falls back to getWalletPublicKey("") + HASH160.
-        """
+    @staticmethod
+    @contextmanager
+    def _log_apdu(operation):
         try:
-            if hasattr(self.dongleObject, "getMasterFingerprint"):
-                return bytes(self.dongleObject.getMasterFingerprint())[0:4]
-            apdu = bytearray(
-                [
-                    self.dongleObject.BTCHIP_CLA,
-                    self.BTCHIP_INS_GET_MASTER_FINGERPRINT,
-                    0x00,
-                    0x00,
-                    0x00,
-                ]
-            )
-            response = self.dongleObject.dongle.exchange(apdu)
-            if len(response) >= 4:
-                return bytes(response[0:4])
+            yield
         except BTChipException as e:
-            if e.sw in (0x6D00, 0x6A80, 0x6B00):  # INS not supported / bad data
-                _logger.info(
-                    "getMasterFingerprint APDU not supported (sw=0x%04x), "
-                    "falling back to getWalletPublicKey",
-                    e.sw,
-                )
-            else:
+            _logger.info("Ledger %s failed (sw=0x%04x)", operation, e.sw)
+            raise
+
+    def _get_master_fingerprint(self) -> bytes:
+        try:
+            with self._log_apdu("GET_MASTER_FINGERPRINT"):
+                if hasattr(self.dongleObject, "getMasterFingerprint"):
+                    response = self.dongleObject.getMasterFingerprint()
+                else:
+                    response = self.dongleObject.dongle.exchange(bytearray([
+                        self.dongleObject.BTCHIP_CLA,
+                        self.BTCHIP_INS_GET_MASTER_FINGERPRINT, 0, 0, 0,
+                    ]))
+        except BTChipException as e:
+            if e.sw not in (0x6D00, 0x6A80, 0x6B00, 0x6F00):
                 raise
-        return self._get_node_fingerprint("")
+            # The legacy read computes exactly the same root fingerprint.
+            # If the device forbids root derivation its error must propagate.
+            return self._get_node_fingerprint("")
+        if not isinstance(response, (bytes, bytearray)) or len(response) != 4:
+            raise UserFacingException(_("Invalid Ledger master fingerprint response."))
+        return bytes(response)
 
     def _get_node_fingerprint(self, bip32_path: str) -> bytes:
-        """Return the 4-byte fingerprint for an arbitrary BIP32 node
-        by calling getWalletPublicKey + HASH160.
-        """
-        nodeData = self.dongleObject.getWalletPublicKey(bip32_path)
-        return hash_160(compress_public_key(nodeData["publicKey"]))[0:4]
+        operation = "xpub parent public key" if bip32_path else "root public key"
+        with self._log_apdu(operation):
+            node_data = self.dongleObject.getWalletPublicKey(bip32_path)
+        return hash_160(compress_public_key(node_data["publicKey"]))[:4]
 
     def is_pairable(self):
         return True
@@ -531,39 +526,48 @@ class Ledger_Client_Legacy(Ledger_Client):
             return cls.FALLBACK_STORAGE_ENCRYPTION_DERIVATION_TESTNET
         return f"m/4541509'/{coin_type}'/0'"
 
+    def _read_storage_key(self, derivation):
+        # Keep the 1.3.3 parent probe: its policy rejection can select the
+        # coin-scoped storage key on devices that permit both leaf reads.
+        path = bip32.normalize_bip32_derivation(derivation, hardened_char="'")[2:]
+        parent = path.rsplit("/", 1)[0]
+        try:
+            with self._log_apdu("storage parent public key"):
+                parent_data = self.dongleObject.getWalletPublicKey(parent)
+                ecc.ECPubkey(bytes(parent_data["publicKey"]))
+        except BTChipException as e:
+            if e.sw != 0x6F00:
+                raise
+            # A storage password uses only the leaf's public key. Try that
+            # exact leaf without constructing an xpub with a guessed parent.
+        with self._log_apdu("storage public key"):
+            node = self.dongleObject.getWalletPublicKey(path)
+        return ecc.ECPubkey(bytes(node["publicKey"])).get_public_key_bytes().hex()
+
     @runs_in_hwd_thread
+    @test_pin_unlocked
     def get_fallback_password_for_storage_encryption(self) -> str:
-        from electrum.keystore import Xpub
-
-        fallback_derivation = self._get_fallback_storage_encryption_derivation()
-        xpub = self.get_xpub(fallback_derivation, "standard")
-        return Xpub.get_pubkey_from_xpub(xpub, ()).hex()
+        self.checkDevice()
+        return self._read_storage_key(self._get_fallback_storage_encryption_derivation())
 
     @runs_in_hwd_thread
-    def get_password_for_storage_encryption(self) -> str:
-        from electrum.keystore import Xpub
+    @test_pin_unlocked
+    def get_password_for_storage_encryption(self, *, decrypt_existing=False) -> str:
         from electrum.storage import get_derivation_used_for_hw_device_encryption
 
-        derivation = get_derivation_used_for_hw_device_encryption()
+        self.checkDevice()
         try:
-            xpub = self.get_xpub(derivation, "standard")
+            return self._read_storage_key(get_derivation_used_for_hw_device_encryption())
         except BTChipException as e:
-            # Ledger Ravencoin app >= 2.4.10 enforces PATH_APP_LOAD_PARAMS = "*/175'"
-            # and rejects the standard Electrum encryption path m/4541509'/1112098098'
-            # with SW 0x6985 / 0x6a82 / 0x6a80 / 0x6b00.
-            if e.sw in (0x6985, 0x6A80, 0x6A82, 0x6B00):
-                fallback_derivation = self._get_fallback_storage_encryption_derivation()
-                _logger.info(
-                    "Ledger rejected standard storage encryption derivation %s (sw=0x%04x); "
-                    "falling back to coin-type-scoped derivation %s",
-                    derivation,
-                    e.sw,
-                    fallback_derivation,
-                )
-                return self.get_fallback_password_for_storage_encryption()
-            else:
+            # Only existing files can authenticate the alternate 1.3.3 key.
+            if e.sw not in (0x6985, 0x6A80, 0x6A82, 0x6B00) and not (
+                decrypt_existing and e.sw == 0x6F00
+            ):
                 raise
-        return Xpub.get_pubkey_from_xpub(xpub, ()).hex()
+        return self.get_fallback_password_for_storage_encryption()
+
+    def get_password_for_storage_decryption(self) -> str:
+        return self.get_password_for_storage_encryption(decrypt_existing=True)
 
     @runs_in_hwd_thread
     def has_usable_connection_with_device(self):
@@ -600,7 +604,8 @@ class Ledger_Client_Legacy(Ledger_Client):
         else:
             fingerprint_bytes = bytes(4)
             childnum_bytes = bytes(4)
-        nodeData = self.dongleObject.getWalletPublicKey(bip32_path)
+        with self._log_apdu("xpub public key"):
+            nodeData = self.dongleObject.getWalletPublicKey(bip32_path)
         publicKey = compress_public_key(nodeData["publicKey"])
         depth = len(bip32_intpath)
         return BIP32Node(
@@ -646,7 +651,8 @@ class Ledger_Client_Legacy(Ledger_Client):
 
     @runs_in_hwd_thread
     def checkDevice(self):
-        firmwareInfo = self.dongleObject.getFirmwareVersion()
+        with self._log_apdu("firmware version"):
+            firmwareInfo = self.dongleObject.getFirmwareVersion()
         firmware = firmwareInfo["version"]
         self.multiOutputSupported = versiontuple(firmware) >= versiontuple(
             MULTI_OUTPUT_SUPPORT
