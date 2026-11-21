@@ -70,10 +70,12 @@ class _DummyHardenedLedgerDongle:
         self.requested_paths.append(path)
         norm_path = path.replace("h", "'").replace("H", "'")
         if self.support_get_master_fp:
-            # Hardened app >= 2.4.10 enforces PATH_APP_LOAD_PARAMS = "*/175'"
+            # Hardened app >= 2.4.10 enforces PATH_APP_LOAD_PARAMS = "*/175'".
+            # lib-app-bitcoin answers a refused derivation with
+            # SW_TECHNICAL_PROBLEM (0x6F00), as seen on real devices.
             parts = [p for p in norm_path.split("/") if p]
             if len(parts) < 2 or parts[1] != "175'":
-                raise BTChipException("Conditions of use not satisfied", sw=0x6985)
+                raise BTChipException("Invalid status 6f00", sw=0x6F00)
         if norm_path == "4541509'/1112098098'":
             return {"publicKey": self.standard_storage_raw, "chainCode": bytes(32)}
         if norm_path == "":
@@ -208,12 +210,12 @@ class TestLedgerLegacyHardenedApp(ElectrumTestCase):
         with self.assertLogs("electrum.plugins.ledger.ledger", "INFO") as logs:
             with self.assertRaises(BTChipException) as failure:
                 client.get_soft_device_id()
-        self.assertEqual(failure.exception.sw, 0x6985)
+        self.assertEqual(failure.exception.sw, 0x6F00)
         self.assertIsNone(client._soft_device_id)
         self.assertEqual(dongle.requested_paths, [""])
         self.assertEqual([r.getMessage() for r in logs.records], [
             "Ledger GET_MASTER_FINGERPRINT failed (sw=0x6f00)",
-            "Ledger root public key failed (sw=0x6985)",
+            "Ledger root public key failed (sw=0x6f00)",
         ])
 
     def test_root_fallback_rejects_invalid_curve_point(self):
@@ -238,7 +240,7 @@ class TestLedgerLegacyHardenedApp(ElectrumTestCase):
         with self.assertRaises(DeviceUnpairableError):
             DeviceMgr.force_pair_keystore(dm, **args)
 
-    def test_storage_6f00_is_scoped_to_operation_and_existing_wallet(self):
+    def test_storage_6f00_selects_scoped_key_for_new_and_existing_wallets(self):
         dongle = _DummyHardenedLedgerDongle(support_get_master_fp=False)
         read_key = dongle.getWalletPublicKey
         client = _make_legacy_client(dongle)
@@ -265,8 +267,8 @@ class TestLedgerLegacyHardenedApp(ElectrumTestCase):
                 raw = storage.raw
                 if i:
                     blocked.add("4541509'/1112098098'")
-                    with self.assertRaises(BTChipException):
-                        client.get_password_for_storage_encryption()
+                    # A new wallet on a path-locked app gets the scoped key.
+                    self.assertEqual(client.get_password_for_storage_encryption(), keys[1])
                 storage = WalletStorage(file_path)
                 wizard = MagicMock()
                 plugin = MagicMock(spec=LedgerPlugin)

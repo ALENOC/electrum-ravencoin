@@ -555,7 +555,7 @@ class Ledger_Client_Legacy(Ledger_Client):
 
     @runs_in_hwd_thread
     @test_pin_unlocked
-    def get_password_for_storage_encryption(self, *, decrypt_existing=False) -> str:
+    def get_password_for_storage_encryption(self) -> str:
         from electrum.storage import get_derivation_used_for_hw_device_encryption
 
         self.checkDevice()
@@ -564,15 +564,16 @@ class Ledger_Client_Legacy(Ledger_Client):
                 get_derivation_used_for_hw_device_encryption(), operation="standard storage"
             )
         except BTChipException as e:
-            # Only existing files can authenticate the alternate 1.3.3 key.
-            if e.sw not in (0x6985, 0x6A80, 0x6A82, 0x6B00) and not (
-                decrypt_existing and e.sw == 0x6F00
-            ):
+            # Path-locked apps (PATH_APP_LOAD_PARAMS "*/175'") fail the
+            # derivation and answer SW_TECHNICAL_PROBLEM (0x6F00). New and
+            # existing files then use the coin-scoped key; decryption also
+            # retries the coin-scoped key when the standard one mismatches.
+            if e.sw not in (0x6985, 0x6A80, 0x6A82, 0x6B00, 0x6F00):
                 raise
         return self.get_fallback_password_for_storage_encryption()
 
     def get_password_for_storage_decryption(self) -> str:
-        return self.get_password_for_storage_encryption(decrypt_existing=True)
+        return self.get_password_for_storage_encryption()
 
     @runs_in_hwd_thread
     def has_usable_connection_with_device(self):
