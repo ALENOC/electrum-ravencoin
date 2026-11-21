@@ -47,14 +47,14 @@ to the BIE3/scrypt encryption envelope after a successful unlock.
 
 ## Download
 
-The maintained release is **1.3.4**, which adds Ledger compatibility
-fallbacks for devices that answer status 6F00
+The maintained release is **1.3.5**, which fixes hardware wallet creation
+on Ledger devices running the Ravencoin app 2.4.15
 ([issue #20](https://github.com/ALENOC/electrum-ravencoin/issues/20)).
 Binaries are published on the
 [releases page](https://github.com/ALENOC/electrum-ravencoin/releases) as a
 source distribution, a Linux x86_64 AppImage, Windows executables from the
 deterministic Wine build, and an x86_64 macOS DMG. Read
-[RELEASE_NOTES_1.3.4.md](RELEASE_NOTES_1.3.4.md) before installing.
+[RELEASE_NOTES_1.3.5.md](RELEASE_NOTES_1.3.5.md) before installing.
 
 Verify what you download before running it: check the artifact against the
 `SHA256SUMS` manifest, and check that manifest against the detached Ed25519
